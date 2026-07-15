@@ -1,0 +1,50 @@
+# Local dev stack for Phù Sa.
+#
+#   docker compose up -d        # start Postgres + Redis
+#   docker compose down         # stop, keep data
+#   docker compose down -v      # stop and wipe volumes (fresh DB)
+#
+# Postgres uses the pgvector image (Postgres 16 + the `vector` extension
+# prebuilt). The other extensions the schema needs -- unaccent, pg_trgm,
+# pgcrypto, citext -- ship with the Postgres contrib package that's already in
+# this image. Flyway creates all of them via `CREATE EXTENSION` in V1-V3, so
+# nothing extra is needed here.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: phusa-postgres
+    environment:
+      POSTGRES_DB: phusa
+      POSTGRES_USER: phusa
+      POSTGRES_PASSWORD: phusa
+    ports:
+      - "5432:5432"
+    volumes:
+      - phusa-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # `pg_isready` alone returns true before the DB is truly accepting
+      # connections on first boot; a trivial SELECT is the honest check.
+      test: ["CMD-SHELL", "pg_isready -U phusa -d phusa && psql -U phusa -d phusa -c 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: phusa-redis
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - phusa-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  phusa-pgdata:
+  phusa-redisdata:
