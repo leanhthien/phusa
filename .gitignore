@@ -1,0 +1,29 @@
+# OS
+.DS_Store
+
+# Private project notes (kept local, not published)
+CLAUDE.md
+
+# Java / Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Env & secrets
+.env
+.env.local
+*.local
+
+# Logs
+*.log
