@@ -23,15 +23,15 @@ before widening it.
 
 ### Infra
 - [x] `docker-compose.yml`: `pgvector/pgvector:pg16` + Redis 7
-- [~] Confirm extensions available: `vector`, `unaccent`, `pg_trgm`, `pgcrypto`, `citext`
-      — 4/5 confirmed on local pg15 (`unaccent`, `pg_trgm`, `pgcrypto`, `citext`);
-      `vector` pending first `docker compose up` on the pg16 image
+- [x] Confirm extensions available: `vector`, `unaccent`, `pg_trgm`, `pgcrypto`, `citext`
+      — all 5 present and created on the pg16 image
 - [ ] Spring Boot 3.x skeleton, Gradle Kotlin DSL, Java 21
 - [ ] Flyway wired, `spring.jpa.hibernate.ddl-auto: validate`
-- [~] **Run V1–V3. They will fail — they were never tested against a real Postgres.**
+- [x] **Run V1–V3. They will fail — they were never tested against a real Postgres.**
       Fix, and note what broke in the Session Log
-      — V1 + V2 apply CLEAN against real Postgres (local pg15). V3 blocked only by
-      missing `vector` extension; awaiting Docker/pg16. Nothing actually broke.
+      — All three apply CLEAN against pg16. Nothing broke. Smoke-tested: generated
+      `url_hash` (32 bytes), HNSW index, and the dual-form Vietnamese tsvector
+      (accented insert, unaccented query → hit). DB reset to empty for Flyway to own.
 - [ ] Testcontainers spins up Postgres in tests, migrations apply green
 
 ### Backend
@@ -221,4 +221,11 @@ YYYY-MM-DD  Phase 0  —
                      errors — the predicted breakage didn't happen. V3 blocked only
                      by missing `vector` extension (no SQL error reached). Next:
                      stand up Docker/pg16, run V3, then Gradle + Spring Boot skeleton.
+2026-07-15  Phase 0  Docker Desktop installed. Brought up the pg16 + redis stack,
+                     ran V1–V3 against the LOCKED environment: all clean, all 5
+                     extensions present. Smoke test passed — generated url_hash,
+                     HNSW index, and dual-form Vietnamese search all work. The
+                     schema is proven. Volume wiped back to empty so the app's
+                     Flyway owns the migrations. Next: Gradle + Spring Boot skeleton,
+                     Flyway wired with ddl-auto=validate.
 ```
