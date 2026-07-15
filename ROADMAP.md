@@ -25,14 +25,23 @@ before widening it.
 - [x] `docker-compose.yml`: `pgvector/pgvector:pg16` + Redis 7
 - [x] Confirm extensions available: `vector`, `unaccent`, `pg_trgm`, `pgcrypto`, `citext`
       — all 5 present and created on the pg16 image
-- [ ] Spring Boot 3.x skeleton, Gradle Kotlin DSL, Java 21
-- [ ] Flyway wired, `spring.jpa.hibernate.ddl-auto: validate`
+- [x] Spring Boot 3.x skeleton, Gradle Kotlin DSL, Java 21
+      — Boot 3.5.3 (pinned; Initializr only emits 4.x now), Kotlin 2.1.21, Gradle 8.14.3
+- [x] Flyway wired, `spring.jpa.hibernate.ddl-auto: validate`
+      — PROVEN: `bootRun` applies V1–V3 (flyway_schema_history at v3), Hibernate
+      validate passes, actuator health UP. Boots in ~1.5s.
 - [x] **Run V1–V3. They will fail — they were never tested against a real Postgres.**
       Fix, and note what broke in the Session Log
       — All three apply CLEAN against pg16. Nothing broke. Smoke-tested: generated
       `url_hash` (32 bytes), HNSW index, and the dual-form Vietnamese tsvector
       (accented insert, unaccented query → hit). DB reset to empty for Flyway to own.
-- [ ] Testcontainers spins up Postgres in tests, migrations apply green
+- [~] Testcontainers spins up Postgres in tests, migrations apply green
+      — Test WRITTEN (`TestcontainersConfiguration` pins pgvector/pgvector:pg16 so
+      `CREATE EXTENSION vector` works). BLOCKED locally: docker-java's zerodep
+      transport gets HTTP 400 from Docker Desktop 29's socket proxy (curl on the
+      same socket returns 200) — a known macOS Docker Desktop quirk, not a code
+      issue. Expected to pass on Linux CI (Phase 6). Substance meanwhile proven via
+      bootRun above.
 
 ### Backend
 - [ ] `Source`, `Article`, `ArticleContent` entities
@@ -228,4 +237,16 @@ YYYY-MM-DD  Phase 0  —
                      schema is proven. Volume wiped back to empty so the app's
                      Flyway owns the migrations. Next: Gradle + Spring Boot skeleton,
                      Flyway wired with ddl-auto=validate.
+2026-07-15  Phase 0  Scaffolded Spring Boot skeleton. Initializr only emits Boot 4.x
+                     now, so hand-wrote build.gradle.kts pinned to Boot 3.5.3 /
+                     Kotlin 2.1.21 / Gradle 8.14.3 (honoring the locked stack).
+                     application.yml: ddl-auto=validate, Flyway on, clean-disabled.
+                     VERIFIED via bootRun against pg16: Flyway applied V1–V3, validate
+                     passed, health UP, ~1.5s startup. `./gradlew build -x test` green,
+                     fat jar builds. TWO environment gotchas hit & documented:
+                     (1) local Homebrew pg15 also on :5432 binds loopback, so the app
+                     hit the wrong DB — reached the Docker pg16 via host IP instead;
+                     (2) Testcontainers blocked by docker-java↔Docker Desktop 29 socket
+                     400 (curl OK) — macOS quirk, will pass on Linux CI. Next: entities
+                     (Source/Article/ArticleContent) + Rome RSS ingest.
 ```

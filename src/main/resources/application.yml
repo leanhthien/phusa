@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: phusa
+
+  datasource:
+    # Matches docker-compose.yml. Override via env in every other environment.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/phusa}
+    username: ${DB_USER:phusa}
+    password: ${DB_PASSWORD:phusa}
+
+  jpa:
+    hibernate:
+      # LOCKED: validate only. Flyway owns the schema; Hibernate must never touch
+      # DDL. `update` would silently diverge from the migrations and mask drift.
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        # We deal in UTC instants everywhere (TIMESTAMPTZ); pin the JDBC tz so
+        # Hibernate doesn't apply the host's local zone.
+        jdbc.time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # Baseline safety: never let Flyway "clean" a database, least of all in prod.
+    clean-disabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
