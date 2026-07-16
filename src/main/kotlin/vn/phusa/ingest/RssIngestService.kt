@@ -1,6 +1,7 @@
 package vn.phusa.ingest
 
 import com.rometools.rome.feed.synd.SyndFeed
+import org.jsoup.Jsoup
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -37,7 +38,7 @@ class RssIngestService(
             if (link.isBlank()) continue
 
             val title = entry.title?.trim().orEmpty().ifBlank { link }
-            val summary = entry.description?.value?.trim()
+            val summary = cleanSummary(entry.description?.value)
             val publishedAt = (entry.publishedDate ?: entry.updatedDate)?.toInstant() ?: Instant.now()
 
             // canonical_url == link for now. Canonicalization (strip utm_*, drop
@@ -48,5 +49,16 @@ class RssIngestService(
 
         log.info("Ingested {}: {} entries, {} written", source.slug, feed.entries.size, written)
         return IngestResult(fetched = feed.entries.size, written = written)
+    }
+
+    /**
+     * RSS `<description>` is usually HTML. Strip it to a plain-text preview and cap the
+     * length — the feed shows a teaser, not the article. jsoup handles tags and entity
+     * unescaping correctly (a regex would mangle both).
+     */
+    private fun cleanSummary(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val text = Jsoup.parse(raw).text().trim()
+        return text.ifBlank { null }?.let { if (it.length > 280) it.take(279).trimEnd() + "…" else it }
     }
 }

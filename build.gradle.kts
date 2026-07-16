@@ -41,6 +41,10 @@ dependencies {
     // Atom) and real-world feed quirks so we don't hand-roll XML parsing.
     implementation("com.rometools:rome:2.1.0")
 
+    // jsoup: HTML → text for feed summaries now; readability-style body extraction
+    // for feed-less sites in Phase 1. The standard JVM HTML parser.
+    implementation("org.jsoup:jsoup:1.18.3")
+
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

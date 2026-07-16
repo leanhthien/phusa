@@ -87,12 +87,24 @@ before widening it.
 - [x] Nothing else. No auth, no reader, no dark mode toggle (dark via prefers-color-scheme)
 
 ### Ship
-- [ ] Multi-stage Dockerfile per service
-- [ ] Deployed to a VPS, real domain, HTTPS
-- [ ] README stub: what it is, live link, how to run locally
+- [x] Multi-stage Dockerfile per service
+      — backend (Gradle→JRE21, non-root) + web (Next standalone, non-root); Caddy
+      reverse proxy for a single origin (and HTTPS-ready for the VPS). Both images
+      build; full stack runs via `docker compose up -d --build`.
+- [ ] Deployed to a VPS, real domain, HTTPS  ← **owner step** (needs a VPS + domain;
+      Caddy auto-provisions HTTPS once the Caddyfile `:80` is set to the domain)
+- [x] README stub: what it is, live link, how to run locally
+      — README updated (Compose one-liner + IDE workflow); live link pending deploy.
+
+- [x] **Scheduled ingest** (needed for the exit criterion, not originally a box):
+      `@Scheduled` crawler + seeder. VERIFIED in-container: crawls dev.to → 12 real
+      articles → feed, unattended, on one origin. jsoup cleans HTML summaries to text.
 
 > **Exit: a stranger can open a URL and see articles that a cron job put there.**
 > Until that's true, nothing below matters.
+>
+> **MET locally** (http://localhost via Compose): scheduled crawl → deduped rows →
+> keyset API → Next feed, all in containers. Only the public VPS URL remains.
 
 ---
 
@@ -322,4 +334,16 @@ YYYY-MM-DD  Phase 0  —
                      so auto-scroll was verified via the fallback button; IO path is
                      standard and works in real browsers. Next: Step 5 Ship (Dockerfiles
                      + deploy). Phase 0 exit still needs a scheduled ingest.
+2026-07-16  Phase 0  Step 5 (ship) done — Phase 0 exit MET locally. Multi-stage
+                     Dockerfiles (backend Gradle→JRE21, web Next standalone), Caddy
+                     reverse proxy = single origin (:80) + HTTPS-ready. @Scheduled
+                     crawler + SourceSeeder: unattended crawl of dev.to → 12 real
+                     articles. Full stack verified in containers via Caddy: page +
+                     /api on one origin, real feed renders. Gotcha: Next `output:
+                     standalone` bakes rewrites at build time, so runtime BACKEND_ORIGIN
+                     was ignored (127.0.0.1 ECONNREFUSED) → solved with the Caddy proxy
+                     instead of the app-level rewrite. Added jsoup to strip HTML from
+                     RSS summaries (dev.to descriptions were raw HTML). README updated.
+                     REMAINING for a public demo: deploy to a VPS w/ domain (owner).
+                     Next widening: Phase 1 (real ingestion + layered dedup).
 ```

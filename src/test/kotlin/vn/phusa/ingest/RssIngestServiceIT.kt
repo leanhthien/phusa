@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.test.context.TestPropertySource
 import vn.phusa.TestcontainersConfiguration
 import vn.phusa.domain.Source
 import vn.phusa.repo.ArticleRepository
@@ -23,6 +24,7 @@ import vn.phusa.repo.SourceRepository
  */
 @Import(TestcontainersConfiguration::class)
 @SpringBootTest
+@TestPropertySource(properties = ["phusa.ingest.enabled=false"])
 class RssIngestServiceIT @Autowired constructor(
     private val ingest: RssIngestService,
     private val sources: SourceRepository,

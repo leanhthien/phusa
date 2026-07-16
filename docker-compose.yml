@@ -45,6 +45,58 @@ services:
       timeout: 3s
       retries: 10
 
+  # The app services below build from source. `docker compose up -d postgres redis`
+  # alone gives just the infra (what you want when running the backend from the IDE).
+  backend:
+    build: .
+    container_name: phusa-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/phusa
+      DB_USER: phusa
+      DB_PASSWORD: phusa
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  web:
+    build: ./web
+    container_name: phusa-web
+    depends_on:
+      backend:
+        condition: service_healthy
+    # No backend URL needed here: behind Caddy the browser hits one origin and
+    # `/api/*` is routed to the backend before it ever reaches this app. The
+    # next.config rewrite only matters for the `npm run dev` (no-Caddy) workflow.
+    expose:
+      - "3000"
+
+  # Single origin in front of web + backend. This is the URL you open (:80), and the
+  # place HTTPS terminates on a real deploy.
+  caddy:
+    image: caddy:2-alpine
+    container_name: phusa-caddy
+    depends_on:
+      - web
+      - backend
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - phusa-caddydata:/data
+      - phusa-caddyconfig:/config
+
 volumes:
   phusa-pgdata:
   phusa-redisdata:
+  phusa-caddydata:
+  phusa-caddyconfig:

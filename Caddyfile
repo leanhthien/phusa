@@ -1,0 +1,18 @@
+# Single entry point for the stack. The browser only ever talks to this origin, so
+# there's no CORS and no build-time backend URL baked into the frontend.
+#
+# Local: listens on :80 (http://localhost). On a VPS, replace `:80` with your domain
+# (e.g. `phusa.example.com`) and Caddy provisions HTTPS automatically.
+:80 {
+	# API goes straight to the Spring backend.
+	handle /api/* {
+		reverse_proxy backend:8080
+	}
+
+	# Everything else is the Next.js app.
+	handle {
+		reverse_proxy web:3000
+	}
+
+	encode gzip
+}

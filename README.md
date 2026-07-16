@@ -6,9 +6,10 @@
 **Phù sa** is Mekong alluvium: sources flow in, junk washes through, and what settles is
 fertile. That is the pipeline.
 
-> **Status:** 🚧 In development — **Phase 0 (vertical slice)**. The database schema is
-> designed and documented; application code is being built out from the migrations up.
-> A live demo link will land here the moment Phase 0 ships.
+> **Status:** 🚧 In development — **Phase 0 (vertical slice) complete end-to-end locally.**
+> A scheduled crawler ingests a real RSS feed → deduped `article` rows → a keyset-paginated
+> API → a Next.js feed with infinite scroll. Runs as four containers via Docker Compose.
+> Public VPS deploy (live link) is the last Phase 0 step.
 
 ---
 
@@ -65,23 +66,26 @@ Tests run against a real Postgres via Testcontainers rather than H2 — H2 has n
 
 ## Getting started (local)
 
-> Prerequisites: Docker + Docker Compose, JDK 21.
+> Prerequisites: Docker + Docker Compose. (For the IDE workflow: JDK 21 and Node 22.)
+
+**Whole stack in containers** — Postgres, Redis, backend, and web:
 
 ```bash
-# 1. Bring up Postgres (pgvector) + Redis
-docker compose up -d
-
-# 2. Apply migrations and run the backend (Flyway runs on boot)
-./gradlew bootRun
-
-# 3. Frontend (once it exists)
-cd web && npm install && npm run dev
+docker compose up -d --build
+# open http://localhost:3000  — the scheduled crawler seeds the feed within ~10s
 ```
 
-> These steps describe the Phase 0 target. As of now the schema migrations under
-> `src/main/resources/db/migration/` are the concrete deliverable; the Gradle skeleton
-> and Compose file are being wired up next. See **[ROADMAP.md](ROADMAP.md)** for exactly
-> what is and isn't done.
+**Working on the backend from your IDE** — run just the infra in Docker:
+
+```bash
+docker compose up -d postgres redis     # pgvector/pg16 + Redis only
+./gradlew bootRun                        # Flyway migrates on boot; API on :8080
+cd web && npm install && npm run dev     # feed UI on :3000 (proxies /api to :8080)
+```
+
+Migrations under `src/main/resources/db/migration/` apply automatically on boot
+(`ddl-auto: validate`, Flyway owns the schema). See **[ROADMAP.md](ROADMAP.md)** for
+exactly what is and isn't done.
 
 ## Repository layout
 

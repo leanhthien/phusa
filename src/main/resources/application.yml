@@ -34,3 +34,14 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+
+phusa:
+  ingest:
+    enabled: ${INGEST_ENABLED:true}
+    interval-ms: ${INGEST_INTERVAL_MS:900000}   # 15 min
+    initial-delay-ms: 8000
+    default-source:
+      slug: devto
+      name: DEV Community
+      homepage-url: https://dev.to
+      feed-url: https://dev.to/feed

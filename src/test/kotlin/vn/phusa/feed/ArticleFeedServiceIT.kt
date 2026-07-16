@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.test.context.TestPropertySource
 import org.springframework.web.server.ResponseStatusException
 import vn.phusa.TestcontainersConfiguration
 import vn.phusa.domain.Source
@@ -21,6 +22,7 @@ import java.time.temporal.ChronoUnit
  */
 @Import(TestcontainersConfiguration::class)
 @SpringBootTest
+@TestPropertySource(properties = ["phusa.ingest.enabled=false"])
 class ArticleFeedServiceIT @Autowired constructor(
     private val service: ArticleFeedService,
     private val sources: SourceRepository,
