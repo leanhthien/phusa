@@ -37,6 +37,10 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 
+    // Rome: the de-facto JVM RSS/Atom parser. Handles the format zoo (RSS 0.9x–2.0,
+    // Atom) and real-world feed quirks so we don't hand-roll XML parsing.
+    implementation("com.rometools:rome:2.1.0")
+
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

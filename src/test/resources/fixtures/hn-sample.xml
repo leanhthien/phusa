@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Hacker News: Front Page (test fixture)</title>
+    <link>https://news.ycombinator.com/</link>
+    <description>Static sample feed for ingest tests.</description>
+    <item>
+      <title>Show HN: A Postgres-only news aggregator</title>
+      <link>https://example.com/a-postgres-only-aggregator</link>
+      <description>No Elasticsearch until a benchmark says so.</description>
+      <pubDate>Mon, 14 Jul 2026 09:00:00 GMT</pubDate>
+      <guid>https://example.com/a-postgres-only-aggregator</guid>
+    </item>
+    <item>
+      <title>Mã nguồn mở và cộng đồng lập trình Việt</title>
+      <link>https://example.com/ma-nguon-mo</link>
+      <description>Bài viết về mã nguồn mở.</description>
+      <pubDate>Mon, 14 Jul 2026 08:30:00 GMT</pubDate>
+      <guid>https://example.com/ma-nguon-mo</guid>
+    </item>
+    <item>
+      <title>Keyset pagination beats OFFSET at depth</title>
+      <link>https://example.com/keyset-vs-offset</link>
+      <description>And it stays correct under concurrent inserts.</description>
+      <pubDate>Mon, 14 Jul 2026 08:00:00 GMT</pubDate>
+      <guid>https://example.com/keyset-vs-offset</guid>
+    </item>
+  </channel>
+</rss>

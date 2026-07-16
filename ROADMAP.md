@@ -54,11 +54,18 @@ before widening it.
   - [x] `search_tsv` → left unmapped (validate only checks mapped columns exist)
   - [x] `ArticleContent` lazy, never fetched by the feed query
         — shared-PK 1:1 via `@MapsId`; `@OneToOne(fetch=LAZY)`; cascade persists content
-- [ ] Rome parses one RSS feed → `Article` rows
-- [ ] Upsert is idempotent: `INSERT ... ON CONFLICT (url_hash) DO UPDATE`.
+- [x] Rome parses one RSS feed → `Article` rows
+      — `FeedFetcher` (HTTP + User-Agent) → `RssIngestService`. Fetch is kept OUT of the
+      DB tx and split across beans so `@Transactional` isn't self-invoked (CLAUDE gotcha).
+- [x] Upsert is idempotent: `INSERT ... ON CONFLICT (url_hash) DO UPDATE`.
       **Test it by running the ingest twice and asserting the row count is unchanged.**
+      — `ON CONFLICT ON CONSTRAINT article_url_hash_uk` (keys off the generated url_hash)
+      with an `IS DISTINCT FROM` guard so unchanged rows write nothing. VERIFIED against
+      compose pg16: pass1 3 written, pass2 0 written, count stays 3. IT covers it too.
 - [ ] `GET /api/articles` — keyset pagination from day one, opaque cursor, no page numbers
-- [ ] One integration test hitting real Postgres
+- [~] One integration test hitting real Postgres
+      — `RssIngestServiceIT` written (double-ingest idempotency + update-in-place).
+      Testcontainers, so green on CI, blocked on this Mac (see Testcontainers note above).
 
 ### Frontend
 - [ ] Next.js App Router + Tailwind + shadcn/ui
@@ -270,4 +277,14 @@ YYYY-MM-DD  Phase 0  —
                      beyond CLAUDE.md's list: CHAR(2) `language` fails validate as
                      varchar → fixed with @JdbcTypeCode(CHAR). search_tsv left unmapped.
                      Next: Rome RSS ingest + idempotent ON CONFLICT(url_hash) upsert.
+2026-07-16  Phase 0  Step 2 (ingest) done. Added Rome 2.1.0. FeedFetcher (HTTP+UA) →
+                     RssIngestService (@Transactional) → FeedIngestOrchestrator (keeps
+                     fetch out of the tx and avoids @Transactional self-invocation).
+                     Idempotent upsert: ON CONFLICT ON CONSTRAINT article_url_hash_uk
+                     DO UPDATE ... WHERE IS DISTINCT FROM. Proven against compose pg16
+                     via throwaway verify runner (embedded feed, since removed): pass1
+                     wrote 3, pass2 wrote 0, count steady at 3. RssIngestServiceIT
+                     (Testcontainers) covers idempotency + update-in-place. Enum
+                     decision saved to memory: String now, typed ArticleStatus when the
+                     state machine appears. Next: GET /api/articles keyset pagination.
 ```
