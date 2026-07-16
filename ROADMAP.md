@@ -45,10 +45,15 @@ before widening it.
       Substance meanwhile proven via bootRun above.
 
 ### Backend
-- [ ] `Source`, `Article`, `ArticleContent` entities
-  - [ ] `url_hash` → `@Generated(event = [EventType.INSERT])`, do not let Hibernate write it
-  - [ ] `search_tsv` → `insertable=false, updatable=false`, or leave unmapped
-  - [ ] `ArticleContent` lazy, never fetched by the feed query
+- [x] `Source`, `Article`, `ArticleContent` entities
+      — mapped under `vn.phusa.domain`; `ddl-auto: validate` passes against the real
+      schema. Gotcha found & fixed: CHAR(2) `language` needed `@JdbcTypeCode(CHAR)`
+      (Hibernate defaults String→varchar). Repos: `SourceRepository`,`ArticleRepository`.
+  - [x] `url_hash` → `@Generated(event = [EventType.INSERT])`, do not let Hibernate write it
+        — VERIFIED: round-trips at 32 bytes, DB generates from canonical_url, read back
+  - [x] `search_tsv` → left unmapped (validate only checks mapped columns exist)
+  - [x] `ArticleContent` lazy, never fetched by the feed query
+        — shared-PK 1:1 via `@MapsId`; `@OneToOne(fetch=LAZY)`; cascade persists content
 - [ ] Rome parses one RSS feed → `Article` rows
 - [ ] Upsert is idempotent: `INSERT ... ON CONFLICT (url_hash) DO UPDATE`.
       **Test it by running the ingest twice and asserting the row count is unchanged.**
@@ -257,4 +262,12 @@ YYYY-MM-DD  Phase 0  —
                      Desktop restart; owner decision = defer to Linux CI, don't hack
                      the build around it. Env is clean for backend work. Next: JPA
                      entities (url_hash @Generated is the first gotcha) + Rome ingest.
+2026-07-16  Phase 0  Step 1 (entities) done. Source/Article/ArticleContent under
+                     vn.phusa.domain + two repos. Proven against compose pg16 with a
+                     throwaway @Profile("verify") runner (since removed): ddl-auto
+                     validate passes, url_hash @Generated round-trips at 32 bytes,
+                     @MapsId shared-PK 1:1 works, cascade persists content. One gotcha
+                     beyond CLAUDE.md's list: CHAR(2) `language` fails validate as
+                     varchar → fixed with @JdbcTypeCode(CHAR). search_tsv left unmapped.
+                     Next: Rome RSS ingest + idempotent ON CONFLICT(url_hash) upsert.
 ```
