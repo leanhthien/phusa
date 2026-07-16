@@ -38,10 +38,11 @@ before widening it.
 - [~] Testcontainers spins up Postgres in tests, migrations apply green
       — Test WRITTEN (`TestcontainersConfiguration` pins pgvector/pgvector:pg16 so
       `CREATE EXTENSION vector` works). BLOCKED locally: docker-java's zerodep
-      transport gets HTTP 400 from Docker Desktop 29's socket proxy (curl on the
+      transport gets HTTP 400 from Docker Desktop 4.82's socket proxy (curl on the
       same socket returns 200) — a known macOS Docker Desktop quirk, not a code
-      issue. Expected to pass on Linux CI (Phase 6). Substance meanwhile proven via
-      bootRun above.
+      issue. DECISION (owner): defer to Linux CI (Phase 6), where Testcontainers
+      works out of the box. Do not contort the build for one machine's Desktop proxy.
+      Substance meanwhile proven via bootRun above.
 
 ### Backend
 - [ ] `Source`, `Article`, `ArticleContent` entities
@@ -249,4 +250,11 @@ YYYY-MM-DD  Phase 0  —
                      (2) Testcontainers blocked by docker-java↔Docker Desktop 29 socket
                      400 (curl OK) — macOS quirk, will pass on Linux CI. Next: entities
                      (Source/Article/ArticleContent) + Rome RSS ingest.
+2026-07-16  Phase 0  Step 0 (env cleanup) complete. Stopped Homebrew pg15 (was binding
+                     loopback :5432 and shadowing the container) — compose pg16 now
+                     owns :5432; verified bootRun connects via plain localhost, Flyway
+                     validates, health UP. Testcontainers 400 persists after a Docker
+                     Desktop restart; owner decision = defer to Linux CI, don't hack
+                     the build around it. Env is clean for backend work. Next: JPA
+                     entities (url_hash @Generated is the first gotcha) + Rome ingest.
 ```
