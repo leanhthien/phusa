@@ -23,12 +23,17 @@ interface ArticleRepository : JpaRepository<Article, Long> {
      *
      * Returns rows affected: 1 on insert or a real update, 0 when the row already
      * matched.
+     *
+     * Phase 0 note: rows land as `status='published'` so the feed (and the partial
+     * `article_feed_idx WHERE status='published'`) has something to show. The real
+     * lifecycle — discovered → fetching → extracted → published, driven by the
+     * crawler and enrichment — arrives in Phase 1/4.
      */
     @Modifying
     @Query(
         value = """
             INSERT INTO article (source_id, canonical_url, title, summary, published_at, status)
-            VALUES (:sourceId, :canonicalUrl, :title, :summary, :publishedAt, 'discovered')
+            VALUES (:sourceId, :canonicalUrl, :title, :summary, :publishedAt, 'published')
             ON CONFLICT ON CONSTRAINT article_url_hash_uk DO UPDATE
                SET title = EXCLUDED.title,
                    summary = EXCLUDED.summary

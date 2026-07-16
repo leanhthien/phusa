@@ -62,10 +62,17 @@ before widening it.
       — `ON CONFLICT ON CONSTRAINT article_url_hash_uk` (keys off the generated url_hash)
       with an `IS DISTINCT FROM` guard so unchanged rows write nothing. VERIFIED against
       compose pg16: pass1 3 written, pass2 0 written, count stays 3. IT covers it too.
-- [ ] `GET /api/articles` — keyset pagination from day one, opaque cursor, no page numbers
+- [x] `GET /api/articles` — keyset pagination from day one, opaque cursor, no page numbers
+      — Row-value `(published_at,id) < (?,?)` via NamedParameterJdbcTemplate; opaque
+      base64 cursor (`<instant>|<id>`); no `?page=`. VERIFIED on 5k seeded rows:
+      first page + deep cursor page both `Index Scan using article_feed_idx`, NO Sort
+      node, 5 buffer hits, ~0.05–0.25ms. Contrast OFFSET 2500: reads 2530 rows, 99
+      buffers — keyset stays flat with depth. Endpoint paged end-to-end, no overlap,
+      bad cursor → 400.
 - [~] One integration test hitting real Postgres
-      — `RssIngestServiceIT` written (double-ingest idempotency + update-in-place).
-      Testcontainers, so green on CI, blocked on this Mac (see Testcontainers note above).
+      — `RssIngestServiceIT` (idempotency + update-in-place) and `ArticleFeedServiceIT`
+      (keyset no-overlap ordering + 400 on bad cursor). Testcontainers → green on CI,
+      blocked on this Mac (see Testcontainers note above).
 
 ### Frontend
 - [ ] Next.js App Router + Tailwind + shadcn/ui
@@ -287,4 +294,14 @@ YYYY-MM-DD  Phase 0  —
                      (Testcontainers) covers idempotency + update-in-place. Enum
                      decision saved to memory: String now, typed ArticleStatus when the
                      state machine appears. Next: GET /api/articles keyset pagination.
+2026-07-16  Phase 0  Step 3 (feed API) done. GET /api/articles, keyset pagination via
+                     NamedParameterJdbcTemplate: row-value (published_at,id)<(?,?),
+                     opaque base64 cursor, no page numbers. Phase-0 tweak: ingest now
+                     writes status='published' (no enrichment pipeline yet) so the
+                     partial article_feed_idx has rows. Proved the plan on 5k seeded
+                     rows: first page AND deep cursor page both Index Scan using
+                     article_feed_idx, NO Sort node, 5 buffers, ~0.05–0.25ms; OFFSET
+                     2500 reads 2530 rows / 99 buffers (captured for the README's
+                     keyset-vs-OFFSET story). Endpoint paged live, no overlap, bad
+                     cursor→400. Added ArticleFeedServiceIT. Next: Step 4 Next.js feed.
 ```
