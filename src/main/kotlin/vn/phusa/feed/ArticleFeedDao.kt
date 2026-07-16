@@ -26,7 +26,7 @@ class ArticleFeedDao(
         val sql = buildString {
             append(
                 """
-                SELECT a.id, a.title, a.summary, a.image_url, a.published_at,
+                SELECT a.id, a.title, a.canonical_url, a.summary, a.image_url, a.published_at,
                        s.slug AS source_slug, s.name AS source_name
                   FROM article a
                   JOIN source s ON s.id = a.source_id
@@ -50,6 +50,7 @@ class ArticleFeedDao(
             ArticleFeedItem(
                 id = rs.getLong("id"),
                 title = rs.getString("title"),
+                canonicalUrl = rs.getString("canonical_url"),
                 summary = rs.getString("summary"),
                 imageUrl = rs.getString("image_url"),
                 publishedAt = rs.getObject("published_at", OffsetDateTime::class.java).toInstant(),

@@ -6,6 +6,7 @@ import java.time.Instant
 data class ArticleFeedItem(
     val id: Long,
     val title: String,
+    val canonicalUrl: String,
     val summary: String?,
     val imageUrl: String?,
     val publishedAt: Instant,

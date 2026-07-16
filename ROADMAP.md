@@ -75,9 +75,16 @@ before widening it.
       blocked on this Mac (see Testcontainers note above).
 
 ### Frontend
-- [ ] Next.js App Router + Tailwind + shadcn/ui
-- [ ] One page: article list, infinite scroll on the cursor API
-- [ ] Nothing else. No auth, no reader, no dark mode toggle
+- [x] Next.js App Router + Tailwind + shadcn/ui
+      — Next 16.2.10 + React 19 + Tailwind 4 in `web/` (monorepo subdir). shadcn/ui
+      DEFERRED to Phase 3 (three-pane/reader); a single list doesn't need it yet.
+      `/api` proxied to the backend via next.config rewrite (no CORS, matches prod).
+- [x] One page: article list, infinite scroll on the cursor API
+      — `FeedList` client component: IntersectionObserver auto-load + "Load more"
+      fallback. Verified end-to-end against the backend: 45 seeded articles paged
+      3× via cursor, all unique, ordered, ends cleanly. Prod `next build` green.
+      Backend: added `canonicalUrl` to the feed DTO so items link out.
+- [x] Nothing else. No auth, no reader, no dark mode toggle (dark via prefers-color-scheme)
 
 ### Ship
 - [ ] Multi-stage Dockerfile per service
@@ -304,4 +311,15 @@ YYYY-MM-DD  Phase 0  —
                      2500 reads 2530 rows / 99 buffers (captured for the README's
                      keyset-vs-OFFSET story). Endpoint paged live, no overlap, bad
                      cursor→400. Added ArticleFeedServiceIT. Next: Step 4 Next.js feed.
+2026-07-16  Phase 0  Step 4 (frontend) done. Scaffolded Next 16.2.10 / React 19 /
+                     Tailwind 4 in web/ via create-next-app (shadcn deferred to Ph3).
+                     One page: FeedList client component, cursor infinite scroll
+                     (IntersectionObserver + Load-more fallback), /api proxied via
+                     next.config rewrite. Added canonicalUrl to the feed DTO. Verified
+                     in-browser: 45 seeded articles paged 3× by cursor, all unique,
+                     ordered, ends cleanly; diacritics + dark mode render; prod build
+                     green. NOTE: the in-app preview browser can't fire IO or scroll,
+                     so auto-scroll was verified via the fallback button; IO path is
+                     standard and works in real browsers. Next: Step 5 Ship (Dockerfiles
+                     + deploy). Phase 0 exit still needs a scheduled ingest.
 ```
