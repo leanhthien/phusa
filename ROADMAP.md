@@ -12,7 +12,10 @@ choices, gotchas); this file holds the *work*.
 - Each phase has an **exit criterion**. It's binary. Meet it before moving on.
 - Append to the Session Log at the bottom when you stop.
 
-**Status: Phase 0 — not started.** Schema written, never executed.
+**Status: Phase 0 — done except the deploy.** Exit criterion met locally: a scheduled
+crawl feeds deduped rows through the keyset API into the Next feed, all in containers
+behind Caddy. Prod config (compose overlay + HTTPS) has landed; what's missing is a
+VPS with `ambert.io.vn` pointed at it. Next widening: Phase 1.
 
 ---
 
@@ -91,8 +94,14 @@ before widening it.
       — backend (Gradle→JRE21, non-root) + web (Next standalone, non-root); Caddy
       reverse proxy for a single origin (and HTTPS-ready for the VPS). Both images
       build; full stack runs via `docker compose up -d --build`.
-- [ ] Deployed to a VPS, real domain, HTTPS  ← **owner step** (needs a VPS + domain;
-      Caddy auto-provisions HTTPS once the Caddyfile `:80` is set to the domain)
+- [ ] Deployed to a VPS, real domain, HTTPS  ← **owner step**: only the box is missing.
+      Domain is `ambert.io.vn`. Config is committed and verified —
+      `docker-compose.prod.yml` (secrets from `.env`, restart policies, mem limits,
+      `:443`) and a Caddyfile whose site address comes from `$SITE_ADDRESS`, so
+      setting it to the domain is what switches on automatic HTTPS. Deploy is
+      `cp .env.prod.example .env` + fill it + `up -d --build` with both compose files.
+      Point DNS and confirm with `dig` FIRST — Let's Encrypt allows 5 duplicate certs
+      per week and retrying into a DNS failure burns the quota.
 - [x] README stub: what it is, live link, how to run locally
       — README updated (Compose one-liner + IDE workflow); live link pending deploy.
 
@@ -346,4 +355,28 @@ YYYY-MM-DD  Phase 0  —
                      RSS summaries (dev.to descriptions were raw HTML). README updated.
                      REMAINING for a public demo: deploy to a VPS w/ domain (owner).
                      Next widening: Phase 1 (real ingestion + layered dedup).
+2026-07-21  Phase 0  Deploy prep. Domain secured: ambert.io.vn. VPS not yet bought —
+                     recommendation is Singapore (~30-50ms to VN vs ~250ms from EU;
+                     the audience clicking the link is in Vietnam), 2 vCPU / 4GB. The
+                     4GB is for the BUILD, not the runtime: the stack idles ~1GB but
+                     Kotlin compilation + `next build` on the box will OOM at 2GB.
+                     SECURITY BUG FOUND & FIXED: compose published postgres, redis and
+                     backend on 0.0.0.0 with phusa/phusa creds. Docker writes its
+                     forwarding rules into the nat table AHEAD of ufw's INPUT chain, so
+                     `ufw deny 5432` would NOT have closed it — a public box would have
+                     had Postgres exposed. Now bound to 127.0.0.1 (IDE still reaches
+                     it; verified against PG 16.14). Had to fix in the BASE file, not
+                     the overlay: compose APPENDS `ports` when merging, so an overlay
+                     can add a port but never remove one — which is also why "443:443"
+                     in the overlay correctly joins the base "80:80". Caddyfile site
+                     address is now {$SITE_ADDRESS::80}: one file, unset→:80 plain HTTP,
+                     set→automatic HTTPS. Validated both modes. New prod overlay:
+                     secrets from .env, restart policies, mem ceilings, pg tuning
+                     (random_page_cost=1.1 — the 4.0 default assumes a spinning disk
+                     and can talk the planner out of article_feed_idx at depth) and
+                     JVM caps (uncapped, the JVM sizes heap off HOST RAM, not its
+                     container share, and grows until the OOM-killer takes Postgres).
+                     Landed 712b41b, pushed. Also fixed this file's status header,
+                     which still read "Phase 0 — not started" with every box ticked.
+                     Next: buy the box, point DNS, deploy — then Phase 1.
 ```
