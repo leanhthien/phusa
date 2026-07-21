@@ -19,7 +19,11 @@ services:
       POSTGRES_USER: phusa
       POSTGRES_PASSWORD: phusa
     ports:
-      - "5432:5432"
+      # Bound to loopback ON PURPOSE. `"5432:5432"` binds 0.0.0.0, and Docker writes
+      # its forwarding rules into the nat table *ahead* of ufw's INPUT chain -- so on
+      # a public host `ufw deny 5432` does not close it. Loopback is reachable from
+      # the IDE (the reason this is published at all) and from nowhere else.
+      - "127.0.0.1:5432:5432"
     volumes:
       - phusa-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -36,7 +40,8 @@ services:
     container_name: phusa-redis
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     ports:
-      - "6379:6379"
+      # Loopback only -- see the note on the postgres port.
+      - "127.0.0.1:6379:6379"
     volumes:
       - phusa-redisdata:/data
     healthcheck:
@@ -60,7 +65,9 @@ services:
       DB_USER: phusa
       DB_PASSWORD: phusa
     ports:
-      - "8080:8080"
+      # Loopback only. Caddy reaches the backend as `backend:8080` over the compose
+      # network; publishing this publicly would expose /api bypassing TLS.
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "sh", "-c", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
       interval: 10s

@@ -1,9 +1,17 @@
 # Single entry point for the stack. The browser only ever talks to this origin, so
 # there's no CORS and no build-time backend URL baked into the frontend.
 #
-# Local: listens on :80 (http://localhost). On a VPS, replace `:80` with your domain
-# (e.g. `phusa.example.com`) and Caddy provisions HTTPS automatically.
-:80 {
+# The site address is the one thing that differs between local and prod, so it comes
+# from the environment rather than living in two divergent copies of this file:
+#
+#   local  SITE_ADDRESS unset -> `:80`, plain HTTP on http://localhost
+#   prod   SITE_ADDRESS=ambert.io.vn -> Caddy provisions HTTPS via Let's Encrypt and
+#          redirects :80 -> :443 automatically
+#
+# No global `email` block: Caddy's ACME works fine without a contact address and
+# auto-renews on its own. Add one (`{ email you@example.com }` above this block) only
+# if you want expiry warnings -- it lands in a public repo, so that's your call.
+{$SITE_ADDRESS::80} {
 	# API goes straight to the Spring backend.
 	handle /api/* {
 		reverse_proxy backend:8080

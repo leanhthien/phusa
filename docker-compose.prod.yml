@@ -1,0 +1,94 @@
+# Production overlay for the VPS. Layered on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# What it changes: real credentials from .env, a real domain on Caddy (+ :443),
+# restart policies, and memory ceilings so the JVM cannot starve Postgres.
+#
+# NOTE ON MERGE SEMANTICS: `environment` is a map -- these values override the base.
+# `ports` is a sequence and compose *appends* it, which is why "443:443" below adds
+# to the base's "80:80" rather than replacing it. It is also why the base file binds
+# its published ports to 127.0.0.1 directly: an overlay cannot take a port away.
+
+services:
+  postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # Defaults ship for a 1GB machine of no particular purpose. This box has one
+    # purpose, so say so. Each of these is worth being able to defend:
+    command:
+      - postgres
+      # Pages cached inside Postgres itself. ~25% of the memory this container is
+      # allowed; the OS page cache handles the rest and is counted separately below.
+      - -c
+      - shared_buffers=256MB
+      # NOT an allocation -- a planner *hint* about how much of the table is likely
+      # already in RAM (Postgres' own buffers + the OS page cache). Set too low, the
+      # planner assumes cold reads and talks itself out of index scans.
+      - -c
+      - effective_cache_size=1GB
+      # The default 4.0 encodes a 2005 spinning disk: a random read costs 4x a
+      # sequential one. On SSD/NVMe it is ~1.1. This is the single most impactful
+      # knob for whether article_feed_idx actually gets used at depth.
+      - -c
+      - random_page_cost=1.1
+      # Per sort/hash node, not per query -- a query with several such nodes can use
+      # this several times over. 8MB is deliberately modest.
+      - -c
+      - work_mem=8MB
+      # Index builds and VACUUM. The HNSW build in V3 is the consumer that cares.
+      - -c
+      - maintenance_work_mem=128MB
+    mem_limit: 1g
+
+  redis:
+    restart: unless-stopped
+    # Unused until the Phase 2 feed cache, but an unbounded Redis on a small box is
+    # a slow-motion OOM. Bound it now and give it an eviction policy so it sheds
+    # cache entries instead of erroring on write.
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+    mem_limit: 192m
+
+  backend:
+    restart: unless-stopped
+    environment:
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Without a cap the JVM sizes its heap off the HOST's RAM, not this container's
+      # share, and grows into Postgres until the kernel OOM-killer picks a victim --
+      # it picks the largest RSS, which is usually Postgres. 60% of 768m leaves room
+      # for metaspace, thread stacks, code cache and direct buffers.
+      #
+      # SerialGC on purpose: at this heap size and core count, G1's extra threads and
+      # per-region bookkeeping cost more than its pause guarantees are worth.
+      JAVA_TOOL_OPTIONS: >-
+        -XX:MaxRAMPercentage=60
+        -XX:+UseSerialGC
+        -XX:+ExitOnOutOfMemoryError
+    mem_limit: 768m
+
+  web:
+    restart: unless-stopped
+    mem_limit: 384m
+
+  caddy:
+    restart: unless-stopped
+    environment:
+      # Drives the site address in the Caddyfile. Setting a real hostname (rather
+      # than `:80`) is what switches Caddy into automatic-HTTPS mode.
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env}
+    ports:
+      # Appended to the base "80:80". Both are required: :443 serves the site, :80
+      # answers the ACME HTTP challenge and then redirects to :443.
+      - "443:443"
+    mem_limit: 128m
