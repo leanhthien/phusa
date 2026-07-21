@@ -100,8 +100,22 @@ before widening it.
       `:443`) and a Caddyfile whose site address comes from `$SITE_ADDRESS`, so
       setting it to the domain is what switches on automatic HTTPS. Deploy is
       `cp .env.prod.example .env` + fill it + `up -d --build` with both compose files.
-      Point DNS and confirm with `dig` FIRST — Let's Encrypt allows 5 duplicate certs
-      per week and retrying into a DNS failure burns the quota.
+      Point DNS and confirm `dig +short ambert.io.vn` returns the VPS IP BEFORE the
+      first `up` — a failed challenge burns Let's Encrypt's failed-validation limit
+      (5 per hostname per hour; recovers over lunch).
+      The limit that actually hurts is the other one: **5 duplicate certs per week**,
+      spent by issuance *succeeding*. Caddy keeps its certs in the `phusa-caddydata`
+      volume, so a plain restart is free — but `down -v` wipes that volume alongside
+      `phusa-pgdata`, and Caddy silently re-issues on the next boot. Four or five
+      `down -v` debug cycles in one afternoon = locked out of issuance for
+      `ambert.io.vn` for the rest of a rolling week, with a working stack serving
+      nothing but TLS errors. Nothing warns you; each issuance logs as success.
+      So: on the VPS use `down`, never `down -v`. And rehearse the plumbing against
+      staging first (`acme_ca https://acme-staging-v02.api.letsencrypt.org/directory`
+      in a global block — untrusted certs, no meaningful limits), then remove it.
+      Note also that Caddy backs off on its own after a failure; `restart` throws that
+      state away and resets the backoff, so the "just restart and see" instinct is
+      exactly the wrong one here.
 - [x] README stub: what it is, live link, how to run locally
       — README updated (Compose one-liner + IDE workflow); live link pending deploy.
 
