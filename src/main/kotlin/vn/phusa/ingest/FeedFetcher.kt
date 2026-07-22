@@ -27,10 +27,17 @@ class FeedFetcher {
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build()
 
-    fun fetch(feedUrl: String): SyndFeed {
+    /**
+     * [config] comes from the source's JSONB column, not from application.yml — the
+     * User-Agent a publisher tolerates and how long its server takes to answer are
+     * facts about *that source*, so they are stored next to it and editable without a
+     * redeploy. Defaulted so callers with nothing to say (tests, ad-hoc fetches) stay
+     * one argument short.
+     */
+    fun fetch(feedUrl: String, config: SourceConfig = SourceConfig.DEFAULTS): SyndFeed {
         val request = HttpRequest.newBuilder(URI.create(feedUrl))
-            .timeout(Duration.ofSeconds(20))
-            .header("User-Agent", USER_AGENT)
+            .timeout(Duration.ofSeconds((config.requestTimeoutSec ?: DEFAULT_TIMEOUT_SEC).toLong()))
+            .header("User-Agent", config.userAgent ?: USER_AGENT)
             .header("Accept", "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8")
             .GET()
             .build()
@@ -45,5 +52,6 @@ class FeedFetcher {
 
     companion object {
         const val USER_AGENT = "PhuSaBot/0.1 (+https://github.com/leanhthien/phusa)"
+        const val DEFAULT_TIMEOUT_SEC = 20
     }
 }

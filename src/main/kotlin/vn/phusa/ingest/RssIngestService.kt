@@ -9,7 +9,10 @@ import vn.phusa.domain.Source
 import vn.phusa.repo.ArticleRepository
 import java.time.Instant
 
-/** [fetched] = entries in the feed; [written] = rows inserted or actually changed. */
+/**
+ * [fetched] = entries actually considered this crawl (the feed's entries, after any
+ * `maxItems` cap); [written] = rows inserted or actually changed.
+ */
 data class IngestResult(val fetched: Int, val written: Int)
 
 /**
@@ -29,11 +32,20 @@ class RssIngestService(
     private val log = LoggerFactory.getLogger(javaClass)
 
     @Transactional
-    fun ingest(source: Source, feed: SyndFeed): IngestResult {
+    fun ingest(
+        source: Source,
+        feed: SyndFeed,
+        config: SourceConfig = SourceConfig.DEFAULTS,
+    ): IngestResult {
         val sourceId = requireNotNull(source.id) { "Source must be persisted before ingest" }
         var written = 0
 
-        for (entry in feed.entries) {
+        // Applied before the loop, not inside it: `maxItems` caps how much of the feed
+        // we consider at all, so a firehose source can't dominate a crawl cycle. Feed
+        // order is newest-first by convention, so a cap keeps the recent items.
+        val entries = config.maxItems?.let { feed.entries.take(it) } ?: feed.entries
+
+        for (entry in entries) {
             val link = entry.link?.trim().orEmpty()
             if (link.isBlank()) continue
 
@@ -47,8 +59,11 @@ class RssIngestService(
             written += articles.upsert(sourceId, link, title, summary, publishedAt)
         }
 
-        log.info("Ingested {}: {} entries, {} written", source.slug, feed.entries.size, written)
-        return IngestResult(fetched = feed.entries.size, written = written)
+        log.info(
+            "Ingested {}: {} entries considered ({} in feed), {} written",
+            source.slug, entries.size, feed.entries.size, written,
+        )
+        return IngestResult(fetched = entries.size, written = written)
     }
 
     /**

@@ -37,11 +37,15 @@ management:
 
 phusa:
   ingest:
+    # DEPLOYMENT switches only -- how often this instance wakes up, and whether it
+    # crawls at all (off in tests). Nothing here is per-source.
+    #
+    # Per-source settings live in the `source` table: uniform policy in real columns
+    # (enabled, crawl_interval_sec, rate_limit_per_min), kind-specific settings in
+    # the `config` JSONB. They have to be editable at runtime -- the scheduler writes
+    # back to them and the Phase 3 admin UI will too -- and yml is read-only to a
+    # running app. `seed/sources.json` bootstraps rows that don't exist yet; after
+    # that the database owns them.
     enabled: ${INGEST_ENABLED:true}
     interval-ms: ${INGEST_INTERVAL_MS:900000}   # 15 min
     initial-delay-ms: 8000
-    default-source:
-      slug: devto
-      name: DEV Community
-      homepage-url: https://dev.to
-      feed-url: https://dev.to/feed

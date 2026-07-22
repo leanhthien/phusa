@@ -13,9 +13,13 @@ import vn.phusa.domain.Source
 class FeedIngestOrchestrator(
     private val fetcher: FeedFetcher,
     private val ingest: RssIngestService,
+    private val configCodec: SourceConfigCodec,
 ) {
     fun run(source: Source): IngestResult {
         val feedUrl = requireNotNull(source.feedUrl) { "Source ${source.slug} has no feed_url" }
-        return ingest.ingest(source, fetcher.fetch(feedUrl))
+        // Parsed once per crawl and threaded through both steps, so the fetch and the
+        // ingest cannot disagree about what this source's settings are.
+        val config = configCodec.read(source)
+        return ingest.ingest(source, fetcher.fetch(feedUrl, config), config)
     }
 }

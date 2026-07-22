@@ -1,0 +1,14 @@
+[
+  {
+    "slug": "devto",
+    "name": "DEV Community",
+    "homepageUrl": "https://dev.to",
+    "kind": "rss",
+    "feedUrl": "https://dev.to/feed",
+    "language": "en",
+    "crawlIntervalSec": 900,
+    "config": {
+      "maxItems": 30
+    }
+  }
+]

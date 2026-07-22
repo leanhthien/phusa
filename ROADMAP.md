@@ -15,7 +15,8 @@ choices, gotchas); this file holds the *work*.
 **Status: Phase 0 — done except the deploy.** Exit criterion met locally: a scheduled
 crawl feeds deduped rows through the keyset API into the Next feed, all in containers
 behind Caddy. Prod config (compose overlay + HTTPS) has landed; what's missing is a
-VPS with `ambert.io.vn` pointed at it. Next widening: Phase 1.
+VPS with `ambert.io.vn` pointed at it — that box is owner-blocked, not code-blocked,
+so Phase 1 has started in parallel: per-source JSONB config is done.
 
 ---
 
@@ -136,7 +137,25 @@ before widening it.
 The part that actually differentiates this from a CRUD app.
 
 ### Sources
-- [ ] Per-source config in DB (`source.config` JSONB), not in application.yml
+- [x] Per-source config in DB (`source.config` JSONB), not in application.yml
+      — `phusa.ingest.default-source` is gone from application.yml (what's left there
+      is deployment-only: enabled / interval). `IngestProperties` deleted with it.
+      V4 adds `CHECK (jsonb_typeof(config) = 'object')` — schemaless isn't
+      constraint-free; without it `'[]'`, `'"rss"'` and `'null'` are all valid JSONB
+      and each one breaks the parse at crawl time in a log nobody reads. Typed
+      `SourceConfig` + `SourceConfigCodec` on the app side, `ignoreUnknown=true` so a
+      row written by a newer deploy doesn't take out an older instance. Live knobs:
+      `userAgent`, `requestTimeoutSec`, `maxItems`. DIVISION OF LABOUR: uniform policy
+      stays in real columns (enabled, crawl_interval_sec, rate_limit_per_min) because
+      it's queried and constrained; JSONB is only for what varies by `kind`. Seeding
+      is insert-if-absent from `seed/sources.json` and never updates — the scheduler
+      and the Phase 3 admin UI write to these rows, so re-applying a file on boot
+      would silently revert them.
+      VERIFIED against compose pg16: V4 applies, validate passes; constraint rejects
+      array/scalar/null and accepts an object; `{"maxItems":3}` in the DB → "3 entries
+      considered (12 in feed)"; `{"maxItems":"lots"}` → WARN + defaults + crawl still
+      succeeds. `SourceConfigCodecTest` 7/7 green — and it's a plain unit test, so it
+      runs on the Mac where Testcontainers is blocked.
 - [ ] 10+ real sources. HackerNews, Dev.to, Reddit, VN tech blogs
 - [ ] jsoup + readability-style extraction for feed-less sites
 - [ ] Playwright-Java for JS-rendered sites — **only if a real source demands it**
@@ -393,4 +412,30 @@ YYYY-MM-DD  Phase 0  —
                      Landed 712b41b, pushed. Also fixed this file's status header,
                      which still read "Phase 0 — not started" with every box ticked.
                      Next: buy the box, point DNS, deploy — then Phase 1.
+2026-07-22  Phase 1  First Phase-1 box: per-source config in JSONB. The column and its
+                     Hibernate mapping already existed from V1 — the actual gap was
+                     that nothing READ it and the source definition still lived in
+                     application.yml. Removed phusa.ingest.default-source (and
+                     IngestProperties, which had no other consumer); what remains in
+                     yml is deployment-only. V4 adds a jsonb_typeof CHECK: schemaless
+                     is not constraint-free, and '[]' / '"rss"' / 'null' are all legal
+                     JSONB that break the parse at crawl time. Typed SourceConfig +
+                     codec on the app side with ignoreUnknown=true (a row written by a
+                     newer deploy must not break an older instance — that's a rollout
+                     outage otherwise). Knobs wired through the pipeline: userAgent +
+                     requestTimeoutSec → FeedFetcher, maxItems → RssIngestService.
+                     Seeding moved to seed/sources.json, insert-if-absent and never
+                     update: the scheduler writes next_crawl_at / etag back to these
+                     rows and Phase 3 gets an admin UI, so re-applying a file on every
+                     boot would silently revert both. Held the line on scope: uniform
+                     policy stays in columns, JSONB only for what varies by kind —
+                     the failure mode here is config blob-ification.
+                     VERIFIED on compose pg16: V4 applies + validate passes; the CHECK
+                     rejects array/scalar/null; {"maxItems":3} → "3 considered (12 in
+                     feed)"; {"maxItems":"lots"} → WARN + defaults + crawl still
+                     succeeds; unknown keys ignored. SourceConfigCodecTest 7/7, plain
+                     unit test so it actually runs on this Mac. Also confirmed the
+                     seeder skipped the pre-existing devto row.
+                     Next: 10+ real sources (extends seed/sources.json), then the
+                     crawl_job queue with FOR UPDATE SKIP LOCKED.
 ```
