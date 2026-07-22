@@ -7,8 +7,184 @@
     "feedUrl": "https://dev.to/feed",
     "language": "en",
     "crawlIntervalSec": 900,
-    "config": {
-      "maxItems": 30
-    }
+    "config": { "maxItems": 30 }
+  },
+  {
+    "slug": "hackernews",
+    "name": "Hacker News",
+    "homepageUrl": "https://news.ycombinator.com",
+    "kind": "rss",
+    "feedUrl": "https://hnrss.org/frontpage",
+    "language": "en",
+    "crawlIntervalSec": 900
+  },
+  {
+    "slug": "lobsters",
+    "name": "Lobsters",
+    "homepageUrl": "https://lobste.rs",
+    "kind": "rss",
+    "feedUrl": "https://lobste.rs/rss",
+    "language": "en",
+    "crawlIntervalSec": 1800
+  },
+  {
+    "slug": "reddit-programming",
+    "name": "r/programming",
+    "homepageUrl": "https://www.reddit.com/r/programming",
+    "kind": "atom",
+    "feedUrl": "https://www.reddit.com/r/programming/.rss",
+    "language": "en",
+    "crawlIntervalSec": 900
+  },
+  {
+    "slug": "github-blog",
+    "name": "The GitHub Blog",
+    "homepageUrl": "https://github.blog",
+    "kind": "rss",
+    "feedUrl": "https://github.blog/feed/",
+    "language": "en",
+    "crawlIntervalSec": 21600
+  },
+  {
+    "slug": "stackoverflow-blog",
+    "name": "Stack Overflow Blog",
+    "homepageUrl": "https://stackoverflow.blog",
+    "kind": "rss",
+    "feedUrl": "https://stackoverflow.blog/feed/",
+    "language": "en",
+    "crawlIntervalSec": 21600,
+    "config": { "maxItems": 30 }
+  },
+  {
+    "slug": "infoq",
+    "name": "InfoQ",
+    "homepageUrl": "https://www.infoq.com",
+    "kind": "rss",
+    "feedUrl": "https://feed.infoq.com/",
+    "language": "en",
+    "crawlIntervalSec": 3600
+  },
+  {
+    "slug": "martinfowler",
+    "name": "martinfowler.com",
+    "homepageUrl": "https://martinfowler.com",
+    "kind": "atom",
+    "feedUrl": "https://martinfowler.com/feed.atom",
+    "language": "en",
+    "crawlIntervalSec": 43200,
+    "config": { "maxItems": 30 }
+  },
+  {
+    "slug": "spring-blog",
+    "name": "Spring Blog",
+    "homepageUrl": "https://spring.io/blog",
+    "kind": "rss",
+    "feedUrl": "https://spring.io/blog.atom",
+    "language": "en",
+    "crawlIntervalSec": 21600
+  },
+  {
+    "slug": "kotlin-blog",
+    "name": "Kotlin Blog",
+    "homepageUrl": "https://blog.jetbrains.com/kotlin",
+    "kind": "rss",
+    "feedUrl": "https://blog.jetbrains.com/kotlin/feed/",
+    "language": "en",
+    "crawlIntervalSec": 21600
+  },
+  {
+    "slug": "android-developers",
+    "name": "Android Developers Blog",
+    "homepageUrl": "https://android-developers.googleblog.com",
+    "kind": "atom",
+    "feedUrl": "https://android-developers.googleblog.com/feeds/posts/default",
+    "language": "en",
+    "crawlIntervalSec": 21600,
+    "config": { "maxItems": 25 }
+  },
+  {
+    "slug": "arstechnica",
+    "name": "Ars Technica",
+    "homepageUrl": "https://arstechnica.com",
+    "kind": "rss",
+    "feedUrl": "https://feeds.arstechnica.com/arstechnica/index",
+    "language": "en",
+    "crawlIntervalSec": 3600
+  },
+  {
+    "slug": "theverge",
+    "name": "The Verge",
+    "homepageUrl": "https://www.theverge.com",
+    "kind": "atom",
+    "feedUrl": "https://www.theverge.com/rss/index.xml",
+    "language": "en",
+    "crawlIntervalSec": 3600
+  },
+  {
+    "slug": "viblo",
+    "name": "Viblo",
+    "homepageUrl": "https://viblo.asia",
+    "kind": "rss",
+    "feedUrl": "https://viblo.asia/rss",
+    "language": "vi",
+    "crawlIntervalSec": 1800,
+    "config": { "maxItems": 30 }
+  },
+  {
+    "slug": "vnexpress-sohoa",
+    "name": "VnExpress Số hóa",
+    "homepageUrl": "https://vnexpress.net/so-hoa",
+    "kind": "rss",
+    "feedUrl": "https://vnexpress.net/rss/so-hoa.rss",
+    "language": "vi",
+    "crawlIntervalSec": 900,
+    "config": { "maxItems": 30 }
+  },
+  {
+    "slug": "genk",
+    "name": "GenK",
+    "homepageUrl": "https://genk.vn",
+    "kind": "rss",
+    "feedUrl": "https://genk.vn/rss/home.rss",
+    "language": "vi",
+    "crawlIntervalSec": 900,
+    "config": { "maxItems": 30 }
+  },
+  {
+    "slug": "tinhte",
+    "name": "Tinh tế",
+    "homepageUrl": "https://tinhte.vn",
+    "kind": "rss",
+    "feedUrl": "https://tinhte.vn/rss",
+    "language": "vi",
+    "crawlIntervalSec": 1800
+  },
+  {
+    "slug": "vietnamnet-congnghe",
+    "name": "VietnamNet Công nghệ",
+    "homepageUrl": "https://vietnamnet.vn/cong-nghe",
+    "kind": "rss",
+    "feedUrl": "https://vietnamnet.vn/rss/cong-nghe.rss",
+    "language": "vi",
+    "crawlIntervalSec": 1800,
+    "config": { "maxItems": 30 }
+  },
+  {
+    "slug": "topdev",
+    "name": "TopDev Blog",
+    "homepageUrl": "https://topdev.vn/blog",
+    "kind": "rss",
+    "feedUrl": "https://topdev.vn/blog/feed",
+    "language": "vi",
+    "crawlIntervalSec": 21600
+  },
+  {
+    "slug": "znews-congnghe",
+    "name": "ZNews Công nghệ",
+    "homepageUrl": "https://znews.vn",
+    "kind": "rss",
+    "feedUrl": "https://znews.vn/rss/cong-nghe.rss",
+    "language": "vi",
+    "crawlIntervalSec": 1800
   }
 ]

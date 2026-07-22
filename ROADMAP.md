@@ -156,7 +156,32 @@ The part that actually differentiates this from a CRUD app.
       considered (12 in feed)"; `{"maxItems":"lots"}` → WARN + defaults + crawl still
       succeeds. `SourceConfigCodecTest` 7/7 green — and it's a plain unit test, so it
       runs on the Mac where Testcontainers is blocked.
-- [ ] 10+ real sources. HackerNews, Dev.to, Reddit, VN tech blogs
+- [~] 10+ real sources. HackerNews, Dev.to, Reddit, VN tech blogs
+      — 20 in `seed/sources.json`: 13 international (HN via hnrss, Dev.to, Lobsters,
+      r/programming, GitHub, Stack Overflow, InfoQ, Martin Fowler, Spring, Kotlin,
+      Android Developers, Ars Technica, The Verge) + 7 Vietnamese (Viblo, VnExpress
+      Số hóa, GenK, Tinh tế, VietnamNet Công nghệ, TopDev, ZNews Công nghệ). The VN
+      half is the part that makes this a *Vietnamese* aggregator rather than another
+      HN mirror.
+      EVERY URL PROBED before it was written down, with the project's real User-Agent
+      and Accept headers: HTTP 200, root element checked, item count counted. Four
+      candidates were rejected on evidence — Baeldung (403 to every UA, Cloudflare),
+      Kipalog (404, site appears dead), and two wrong-path guesses. Corrections the
+      probe caught: `viblo.asia/feed` is 404, the real path is `/rss`;
+      `topdev.vn/blog/feed/` with a trailing slash hangs, without it is fine;
+      `spring.io/blog.atom` serves RSS despite the extension.
+      FINDING, against my own prediction: NOTHING needed a `userAgent` override. The
+      one apparent 403-on-bot-UA (hnrss) was a transient timeout that a retry cleared.
+      The knob stays because it costs nothing, but it has not yet earned its keep —
+      worth remembering before adding knobs on a hunch.
+      `SourceSeedFileTest` (11 tests) validates the file against the table's own
+      constraints — unique slugs/feed urls, kind token, feed url present for rss/atom,
+      interval floor, CHAR(2) language, config is an object, config survives the
+      codec. Container-free, so it runs on this Mac. 18/18 green with the codec tests.
+      REMAINING: the live 20-source crawl is UNVERIFIED. Docker Desktop stopped
+      launching mid-task ("Launchd job spawn failed", error 163) after a sleep/wake,
+      so no Postgres was reachable. Boot once Docker is back and confirm 19 new rows
+      seed, all 20 crawl, and per-source article counts look sane.
 - [ ] jsoup + readability-style extraction for feed-less sites
 - [ ] Playwright-Java for JS-rendered sites — **only if a real source demands it**
 
@@ -438,4 +463,28 @@ YYYY-MM-DD  Phase 0  —
                      seeder skipped the pre-existing devto row.
                      Next: 10+ real sources (extends seed/sources.json), then the
                      crawl_job queue with FOR UPDATE SKIP LOCKED.
+2026-07-22  Phase 1  Source list: 1 → 20 (13 international + 7 Vietnamese). Probed
+                     every candidate with the project's real UA/Accept before writing
+                     it down rather than trusting memory for feed URLs — which was the
+                     right call, because four candidates failed and three "obvious"
+                     URLs were wrong: viblo.asia/feed is 404 (it's /rss),
+                     topdev.vn/blog/feed/ hangs with the trailing slash, and
+                     spring.io/blog.atom serves RSS despite the extension. Rejected on
+                     evidence: Baeldung (403 to every UA — Cloudflare) and Kipalog
+                     (404, looks dead). Two probe bugs found and fixed mid-flight:
+                     `grep -c` counts LINES not matches, so minified feeds all reported
+                     items=1; and a curl 000 I nearly recorded as UA-gating was just a
+                     transient timeout. HONEST FINDING: nothing needed a userAgent
+                     override, contradicting my own prediction last session that it
+                     would "earn its keep almost immediately". Knob stays (free), but
+                     unproven — a reminder not to add config on a hunch.
+                     Added SourceSeedFileTest (11 tests) mirroring the table's
+                     constraints so a seed typo fails `gradlew test` instead of
+                     ApplicationRunner on the VPS. 18/18 green, container-free.
+                     BLOCKED: Docker Desktop stopped launching after a sleep/wake
+                     ("Launchd job spawn failed", error 163) — retried once, same
+                     failure, no lingering processes and no socket. So the live
+                     20-source crawl is NOT verified; box left [~] not [x]. Needs a
+                     Docker restart (possibly a reboot) then one bootRun.
+                     Next: verify that crawl, then the crawl_job queue.
 ```
