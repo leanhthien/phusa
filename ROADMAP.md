@@ -178,20 +178,64 @@ The part that actually differentiates this from a CRUD app.
       constraints — unique slugs/feed urls, kind token, feed url present for rss/atom,
       interval floor, CHAR(2) language, config is an object, config survives the
       codec. Container-free, so it runs on this Mac. 18/18 green with the codec tests.
-      REMAINING: the live 20-source crawl is UNVERIFIED. Docker Desktop stopped
-      launching mid-task ("Launchd job spawn failed", error 163) after a sleep/wake,
-      so no Postgres was reachable. Boot once Docker is back and confirm 19 new rows
-      seed, all 20 crawl, and per-source article counts look sane.
+      NOW VERIFIED (2026-07-23, once Docker came back): 19 rows seeded (devto already
+      existed), all 20 sources crawled green through the job queue on the first run —
+      407 items found, 401 new, zero failures. Slowest was martinfowler (13.0s),
+      fastest znews (0.23s). Article table 144 → 543.
 - [ ] jsoup + readability-style extraction for feed-less sites
 - [ ] Playwright-Java for JS-rendered sites — **only if a real source demands it**
 
 ### Job queue
-- [ ] `@Scheduled` scans `source` for `next_crawl_at <= now()`, enqueues `crawl_job`
-- [ ] Worker claims with `FOR UPDATE SKIP LOCKED`, batch of 10
-- [ ] Retry with exponential backoff; `attempt >= max_attempts` → `state='dead'`
-- [ ] Lease reaper: `state='running' AND locked_until < now()` → back to pending
-- [ ] `crawl_log` row per HTTP attempt
-- [ ] Backoff on `source.consecutive_failures` — a dead site shouldn't be hit every 15 min
+- [x] `@Scheduled` scans `source` for `next_crawl_at <= now()`, enqueues `crawl_job`
+      — `CrawlScheduler.enqueue()`, one `INSERT..SELECT`. Replaces the Phase-0
+      `IngestScheduler`, which crawled every source every tick and ignored
+      `crawl_interval_sec` entirely — at 20 sources that would have fetched
+      martinfowler.com ~2,900 times a month for a blog that posts a few times.
+      `ON CONFLICT (source_id, job_type) WHERE state IN ('pending','running')` — the
+      WHERE is mandatory, not decoration: Postgres only infers a PARTIAL unique index
+      if the clause repeats the index predicate verbatim, otherwise you get "no unique
+      or exclusion constraint matching" at runtime. VERIFIED: 5 enqueue passes in a
+      row insert 7, then 0, 0, 0, 0.
+- [x] Worker claims with `FOR UPDATE SKIP LOCKED`, batch of 10
+      — `CrawlJobDao.claimBatch`. PROVEN with two concurrent psql sessions: A claims 3
+      and holds its transaction 6s; B runs the identical query and returns in **83ms**
+      with disjoint ids. Same test with plain `FOR UPDATE`: B blocks **4106ms**. ~50x,
+      and the numbers are the README artifact.
+      NUANCE WORTH KEEPING: without SKIP LOCKED B still eventually got *different*
+      rows — plain `FOR UPDATE` is CORRECT, just serialised. SKIP LOCKED buys
+      throughput, not correctness. Claiming otherwise in an interview is a trap.
+      TRANSACTION SHAPE is the load-bearing part: claim commits IMMEDIATELY, then the
+      HTTP fetch runs with no transaction, then a short finish transaction. Wrapping
+      the loop in `@Transactional` would pin a connection across a 20s fetch and hold
+      the claim's row locks the whole time — at which point SKIP LOCKED protects
+      nothing. What makes early commit safe is the LEASE (`locked_until`), which
+      outlives the row lock and is visible to other processes.
+- [x] Retry with exponential backoff; `attempt >= max_attempts` → `state='dead'`
+      — 60s base, doubling, capped 1h, with **jitter**: without it a batch that failed
+      together retries together and thunders the herd on whatever just recovered.
+      The dead/retry decision is made in SQL against the row's own attempt counter, not
+      the worker's in-memory copy, so a concurrent reaper can't grant an extra attempt.
+      TRAP FOUND AND CLOSED (confirmed against the live schema before writing code):
+      `crawl_job_att_ck CHECK (attempt <= max_attempts)` + claim-time `attempt+1` means
+      a job reaped at attempt=max_attempts violates the CHECK on its next claim and
+      takes the whole batch down with it. Guarded in both the claim predicate
+      (`attempt < max_attempts`) and the reaper's CASE.
+      VERIFIED live: broken source → attempt 1/5 pending, retry in 53s (jittered from
+      60s); fast-forwarded to 5/5 → `dead`, finished_at set, lease cleared.
+- [x] Lease reaper: `state='running' AND locked_until < now()` → back to pending
+      — `CrawlScheduler.reap()`. Without it an OOM-killed worker leaves jobs 'running'
+      forever, and because 'running' is INSIDE the partial unique index that source can
+      never be enqueued again — one crash silently retires a source. VERIFIED: expired
+      lease → pending; exhausted job → dead, never pending.
+- [x] `crawl_log` row per HTTP attempt
+      — success and failure both. VERIFIED: 20 rows for the 20-source run
+      (407 found / 401 new), 2 rows for the broken source's 2 real attempts.
+- [x] Backoff on `source.consecutive_failures` — a dead site shouldn't be hit every 15 min
+      — distinct from the per-job retry above: this is a property of the SOURCE across
+      jobs. Capped at 1h so a recovered source is picked up within the hour.
+      VERIFIED: failure → consecutive_failures=1, next_crawl_at pushed 55s; success →
+      reset to 0 and next_crawl_at = now + crawl_interval_sec (900s sources came due in
+      ~8 min, 1800s in ~23 min — the per-source interval the old scheduler ignored).
 
 ### Politeness (this is a portfolio piece — being a bad citizen is a bad look)
 - [ ] robots.txt respected and cached
@@ -487,4 +531,37 @@ YYYY-MM-DD  Phase 0  —
                      20-source crawl is NOT verified; box left [~] not [x]. Needs a
                      Docker restart (possibly a reboot) then one bootRun.
                      Next: verify that crawl, then the crawl_job queue.
+2026-07-23  Phase 1  Job queue done — all 6 boxes. Docker recovered on its own, so the
+                     20-source crawl owed from last session also got verified: 19 rows
+                     seeded, ALL 20 sources green first try, 407 found / 401 new,
+                     articles 144 → 543. That box is now [x].
+                     SKIP LOCKED proven with two concurrent psql sessions rather than
+                     asserted: A holds 3 locked rows for 6s, B runs the identical claim
+                     and returns in 83ms with disjoint ids; the same query with plain
+                     FOR UPDATE blocks 4106ms. ~50x — and the honest nuance is that
+                     plain FOR UPDATE is still CORRECT (B got different rows once A
+                     committed), just serialised. SKIP LOCKED buys throughput, not
+                     correctness; worth not overclaiming in an interview.
+                     Found a real trap BEFORE writing code by testing the DDL:
+                     crawl_job_att_ck is `attempt <= max_attempts` and the claim does
+                     attempt+1, so a job reaped at max_attempts violates the CHECK on
+                     its next claim and kills the whole batch. Guarded in the claim
+                     predicate and the reaper CASE; both verified.
+                     Transaction shape is the thing I'd defend hardest: claim commits
+                     immediately, fetch runs OUTSIDE any transaction, finish is its own
+                     short tx. The lease (locked_until) — not the row lock — is what
+                     protects an in-flight job, because it outlives the transaction and
+                     other processes can see it.
+                     Deleted IngestScheduler (crawled everything every tick, ignored
+                     crawl_interval_sec) and FeedIngestOrchestrator (CrawlWorker now
+                     plays its role). Per-source intervals now actually honored:
+                     900s sources came due in ~8 min, 1800s in ~23 min.
+                     ENVIRONMENT NOTE: found the whole Compose stack still running from
+                     an earlier session, with phusa-backend on STALE code publishing
+                     0.0.0.0:8080 (pre-dating the loopback fix — the fix is in the
+                     compose file, but a running container keeps its original config).
+                     It had been crawling into the same DB. Stopped backend/web/caddy;
+                     rebuild before trusting a container run.
+                     Next: politeness (conditional GET is nearly free — etag/
+                     last_modified columns already exist), then layered dedup.
 ```

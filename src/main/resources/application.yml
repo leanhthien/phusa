@@ -46,6 +46,18 @@ phusa:
     # back to them and the Phase 3 admin UI will too -- and yml is read-only to a
     # running app. `seed/sources.json` bootstraps rows that don't exist yet; after
     # that the database owns them.
+    # Gates the source seeder only; the crawl loop is phusa.crawl below.
     enabled: ${INGEST_ENABLED:true}
-    interval-ms: ${INGEST_INTERVAL_MS:900000}   # 15 min
-    initial-delay-ms: 8000
+
+  crawl:
+    # The job queue. Same rule as above: deployment-level only. How often a source is
+    # crawled is `source.crawl_interval_sec`, per source, in the database.
+    enabled: ${CRAWL_ENABLED:true}
+    enqueue-interval-ms: ${CRAWL_ENQUEUE_INTERVAL_MS:60000}    # scan for due sources
+    poll-interval-ms: ${CRAWL_POLL_INTERVAL_MS:15000}          # claim + work a batch
+    reap-interval-ms: ${CRAWL_REAP_INTERVAL_MS:120000}         # reclaim dead leases
+    batch-size: ${CRAWL_BATCH_SIZE:10}
+    lease-seconds: ${CRAWL_LEASE_SECONDS:300}
+    retry-base-seconds: 60
+    retry-max-seconds: 3600
+    source-backoff-max-seconds: 3600

@@ -22,8 +22,8 @@ data class IngestResult(val fetched: Int, val written: Int)
  * transaction — you never want to hold a Postgres transaction open across a slow,
  * flaky HTTP call. Callers fetch first, then hand the parsed feed here. That also
  * sidesteps the `@Transactional` self-invocation trap: because this method is
- * invoked from another bean ([FeedIngestOrchestrator]) it goes through the proxy
- * and the transaction actually applies.
+ * invoked from another bean (`CrawlWorker`) it goes through the proxy and the
+ * transaction actually applies.
  */
 @Service
 class RssIngestService(
