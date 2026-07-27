@@ -276,7 +276,53 @@ The part that actually differentiates this from a CRUD app.
       container, no network. 27/27 green with the other unit tests.
 
 ### Dedup — the interesting problem, do it in layers
-- [ ] URL canonicalization: strip `utm_*`, fragments, sort query params → `canonical_url`
+- [x] URL canonicalization: strip `utm_*`, fragments, sort query params → `canonical_url`
+      — `UrlCanonicalizer` (pure, total, no Spring) + `V5__canonicalize_article_urls.sql`
+      to retrofit the 582 existing rows. EVERY RULE CHOSEN AGAINST THE REAL TABLE, and
+      the REJECTED rules are the more interesting half:
+      • lowercase the path — REJECTED, decisive counter-evidence: all 47 uppercase rows
+        have it in the *path* (`bliki/VibeCoding.html`, `podcast-S5E18`). Only scheme and
+        host are case-insensitive (RFC 3986 §6.2.2.1); lowercasing 404s six real articles.
+      • http→https upgrade — REJECTED. 2 rows are plain http. Rewriting the scheme
+        asserts reachability we never verified.
+      • strip `www.` — REJECTED. 57 rows have it, *zero* collide with a bare-host twin;
+        different DNS name, may serve different content. No measurable gain.
+      • trailing slash — APPLIED, and it's the one rule with no collision evidence
+        (158 have one, none collide). Narrower argument: unlike www/https it can't change
+        which server answers. Stated plainly as the weakest link rather than hidden.
+      WHY THE MIGRATION IS MANDATORY, not tidy-up: `url_hash` is GENERATED from
+      `canonical_url` and carries the UNIQUE constraint, so canonical_url IS the dedup
+      identity. Ship the canonicalizer alone and the next crawl sees a *different* string
+      for every InfoQ article (16 rows, all with `utm_*`) → different hash → no conflict
+      → INSERT. Every known article from a param-emitting source silently doubles.
+      Canonicalizer without backfill is worse than neither.
+      THE HAZARD, real and not theoretical: canonicalization is lossy on purpose, so rows
+      that were unique can stop being unique. martinfowler.com publishes incrementally and
+      the feed points at a new `#section` each time — THREE rows (5520/5523/5524) collapse
+      onto one document once the fragment is dropped. RFC 3986: the fragment is never sent
+      to the server, so they are one resource and merging is correct.
+      RESOLUTION: earliest `published_at` wins (id tie-break); losers get
+      `status='duplicate'` + `duplicate_of_id`. Losers KEEP their original URL — an
+      untouched URL can't collide, which is what makes the winners' hash recompute safe.
+      Losers first, winners second; the order is load-bearing. Nothing is deleted:
+      `article_content`, `article_tag`, `article_embedding` and `bookmark` all FK here and
+      a vanishing bookmark is a worse bug than a duplicate row.
+      DRIFT RISK NAMED AND MEASURED: the SQL is a second implementation of the same rules.
+      Verified by differential test — dumped all 582 live URLs through the SQL function and
+      through the Kotlin: **582 compared, 0 mismatches.** The SQL is then DROPped; it is a
+      frozen historical fix, not a shared home for the rules (a Flyway migration must mean
+      the same thing forever, so it must not call live app code).
+      VERIFIED end-to-end: V5 applied in 33ms → 0 utm remaining, 171 URLs rewritten, 2
+      rows marked duplicate. Re-crawled all 20 sources: the original 16 InfoQ rows kept
+      their ids and `discovered_at`, so the incoming canonicalized URL matched the
+      backfilled one — no re-insert. Today's 15 InfoQ rows are genuinely new (0 path
+      collisions). Zero repeated title-within-source across all 832 rows.
+      ALSO: `duplicate_of_id` is a self-FK with `ON DELETE SET NULL` and had no index, so
+      every article delete sequentially scanned `article` for referrers. Added partial
+      (`WHERE duplicate_of_id IS NOT NULL`) now that the column is finally populated.
+      `UrlCanonicalizerTest` 15 tests, half of them asserting the rejected rules DON'T
+      apply — an over-eager canonicalizer merges two real articles and the loser is
+      unrecoverable. 42/42 unit tests green.
 - [ ] Exact: SHA-256 of normalized body → `content_hash`
 - [ ] Near: simhash of body → `simhash`, Hamming distance threshold
 - [ ] Headline: pg_trgm similarity within a 48h window
@@ -623,4 +669,43 @@ YYYY-MM-DD  Phase 0  —
                      FeedFetcherConditionalTest (9 tests) against a JDK stub HttpServer
                      — no container, no network, deterministic. 27/27 unit tests green.
                      Next: per-domain rate limit + robots.txt, then layered dedup.
+
+2026-07-27 (2)      Dedup layer 1: URL canonicalization + the backfill it forces.
+                     Done now rather than later on purpose — url_hash is GENERATED from
+                     canonical_url, so this rewrites the dedup identity of every existing
+                     row. At 582 rows the fix is one UPDATE; after 48h of unattended
+                     crawling it is a collision-handling backfill over a much larger
+                     table. Cost grows with delay.
+                     The rules came from profiling the real 582 rows, not from a list of
+                     things canonicalizers usually do — and four candidate rules were
+                     REJECTED on evidence. Lowercasing the path would have 404'd six
+                     martinfowler bliki URLs (all 47 uppercase rows have it in the path,
+                     not the host). See the Dedup section for the full set.
+                     The hazard was real, not hypothetical: martinfowler publishes an
+                     article incrementally with a new #section per feed entry, so three
+                     rows collapse onto one document. Earliest published wins, losers
+                     keep their original URL so the winners' hash recompute can't
+                     collide, nothing deleted (four tables FK to article).
+                     THE THING I DID NOT WANT TO ASSERT WITHOUT CHECKING: the migration
+                     SQL is a second implementation of the Kotlin rules. Dumped all 582
+                     live URLs through both — 582 compared, 0 mismatches — then deleted
+                     the throwaway test. The SQL function is DROPped at the end of the
+                     migration so it can never become an API; a Flyway migration has to
+                     keep meaning what it meant when it ran, which is also why it does
+                     not call app code.
+                     Self-inflicted lesson worth keeping: an earlier manual test ran the
+                     migration OUTSIDE a transaction, where `CREATE TEMP TABLE ... ON
+                     COMMIT DROP` disappears between statements — the UPDATEs errored but
+                     `CREATE INDEX` committed, and the real Flyway run then failed on
+                     "already exists". Flyway rolled back cleanly and the data was
+                     untouched, so the failure was loud and harmless. Switched to an
+                     explicit DROP TABLE so the migration behaves the same in or out of a
+                     transaction, and did NOT add `IF NOT EXISTS` — that would have
+                     masked a genuine conflict to paper over my own test pollution.
+                     Also indexed duplicate_of_id: self-FK, ON DELETE SET NULL, no index,
+                     so every delete scanned article for referrers.
+                     42/42 unit tests green. The 5 Testcontainers ITs still can't start
+                     on this Mac — pre-existing, unrelated.
+                     Next: robots.txt + per-domain rate limit, then dedup layers 2-4
+                     (content_hash, simhash, pg_trgm headline).
 ```

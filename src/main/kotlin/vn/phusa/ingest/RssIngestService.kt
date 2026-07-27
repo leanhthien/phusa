@@ -53,10 +53,12 @@ class RssIngestService(
             val summary = cleanSummary(entry.description?.value)
             val publishedAt = (entry.publishedDate ?: entry.updatedDate)?.toInstant() ?: Instant.now()
 
-            // canonical_url == link for now. Canonicalization (strip utm_*, drop
-            // fragments, sort query params) is a Phase 1 dedup layer. url_hash is
-            // GENERATED from this value in the DB, so it's the upsert's conflict key.
-            written += articles.upsert(sourceId, link, title, summary, publishedAt)
+            // Dedup layer 1. url_hash is GENERATED from canonical_url in the DB and
+            // carries the UNIQUE constraint, so this call decides the upsert's conflict
+            // key — canonicalize BEFORE the insert or the row lands under the wrong
+            // identity and no later layer can recover it.
+            val canonicalUrl = UrlCanonicalizer.canonicalize(link)
+            written += articles.upsert(sourceId, canonicalUrl, title, summary, publishedAt)
         }
 
         log.info(
