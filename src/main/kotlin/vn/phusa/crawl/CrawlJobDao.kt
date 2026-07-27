@@ -16,6 +16,9 @@ data class ClaimedJob(
     val sourceSlug: String,
     val feedUrl: String?,
     val sourceConfig: String,
+    /** HTTP validators from the previous fetch; sent back to make this request conditional. */
+    val httpEtag: String?,
+    val httpLastModified: String?,
 )
 
 /**
@@ -111,9 +114,11 @@ class CrawlJobDao(
                     FOR UPDATE SKIP LOCKED
              )
             RETURNING j.id, j.source_id, j.attempt, j.max_attempts,
-                      (SELECT s.slug     FROM source s WHERE s.id = j.source_id) AS source_slug,
-                      (SELECT s.feed_url FROM source s WHERE s.id = j.source_id) AS feed_url,
-                      (SELECT s.config   FROM source s WHERE s.id = j.source_id) AS source_config
+                      (SELECT s.slug               FROM source s WHERE s.id = j.source_id) AS source_slug,
+                      (SELECT s.feed_url           FROM source s WHERE s.id = j.source_id) AS feed_url,
+                      (SELECT s.config             FROM source s WHERE s.id = j.source_id) AS source_config,
+                      (SELECT s.http_etag          FROM source s WHERE s.id = j.source_id) AS http_etag,
+                      (SELECT s.http_last_modified FROM source s WHERE s.id = j.source_id) AS http_last_modified
             """.trimIndent(),
             MapSqlParameterSource()
                 .addValue("worker", worker)
@@ -129,8 +134,39 @@ class CrawlJobDao(
                 sourceSlug = rs.getString("source_slug"),
                 feedUrl = rs.getString("feed_url"),
                 sourceConfig = rs.getString("source_config") ?: "{}",
+                httpEtag = rs.getString("http_etag"),
+                httpLastModified = rs.getString("http_last_modified"),
             )
         }
+
+    /**
+     * Persist the validators a 200 response gave us, so the next fetch can be
+     * conditional.
+     *
+     * COALESCE, not plain assignment: a server is allowed to send only one of the two,
+     * and overwriting a good stored ETag with NULL because this particular response
+     * omitted it would silently disable conditional GET for that source. Keep whatever
+     * we had unless the server offered something newer.
+     *
+     * Deliberately NOT called on 304. A 304 means the stored validators are still
+     * correct — and RFC 9110 lets a 304 omit the ETag entirely, so treating its
+     * headers as authoritative would erase working state on every successful hit.
+     */
+    fun storeValidators(sourceId: Long, etag: String?, lastModified: String?): Int {
+        if (etag == null && lastModified == null) return 0
+        return jdbc.update(
+            """
+            UPDATE source
+               SET http_etag          = COALESCE(:etag, http_etag),
+                   http_last_modified = COALESCE(:lastModified, http_last_modified)
+             WHERE id = :id
+            """.trimIndent(),
+            MapSqlParameterSource()
+                .addValue("id", sourceId)
+                .addValue("etag", etag)
+                .addValue("lastModified", lastModified),
+        )
+    }
 
     /** Job finished cleanly. Clearing the lease is what lets the partial unique index free up. */
     fun markSucceeded(jobId: Long, now: Instant): Int = jdbc.update(

@@ -240,9 +240,40 @@ The part that actually differentiates this from a CRUD app.
 ### Politeness (this is a portfolio piece — being a bad citizen is a bad look)
 - [ ] robots.txt respected and cached
 - [ ] Per-domain rate limit
-- [ ] Real User-Agent with a contact URL
-- [ ] HTTP conditional GET — `etag` / `last_modified` columns already exist. A 304 should
+- [x] Real User-Agent with a contact URL
+      — `PhuSaBot/0.1 (+https://github.com/leanhthien/phusa)`, since Phase 0. Landed
+      early; ticking it now that the politeness section is being worked properly.
+      Per-source override available via `source.config.userAgent` (still unused —
+      all 20 sources accept the bot UA).
+- [x] HTTP conditional GET — `etag` / `last_modified` columns already exist. A 304 should
       cost you nothing
+      — `FeedFetcher` sends `If-None-Match` / `If-Modified-Since` from the validators
+      stored on `source`; returns a sealed `FetchResult` (`Fetched` | `NotModified`).
+      THE TRAP, and the reason this is worth a test: **304 is not in the 2xx range.**
+      The pre-existing `check(status in 200..299)` turned the single best outcome of a
+      conditional request into an exception — which would then feed retry/backoff and
+      eventually mark a perfectly healthy source dead. Checked for 304 *before* the
+      success check.
+      Sealed type, not `SyndFeed?`: "nothing changed" and "nothing came back" are
+      opposite events (best case vs failure), and collapsing them invites exactly the
+      bug above.
+      `storeValidators` uses COALESCE and is NOT called on 304 — a server may send only
+      one validator, and RFC 9110 lets a 304 omit the ETag entirely, so treating either
+      as authoritative would erase working state on every successful hit.
+      MEASURED across all 20 sources (fetch, then re-fetch with validators):
+      **10/20 return 304; 1.05 MB of 2.05 MB saved on a no-change poll (~51%).**
+      Verified end-to-end through the app on two passes: pass 1 all 200 + validators
+      stored for 16 sources; pass 2 → 10× 304, 30× 200 across both passes, all 40 jobs
+      succeeded, zero consecutive_failures, validators retained, 304 rows logged
+      items 0/0 (nothing changed ≠ unknown). Pass 2's 200s found 660 items, only 53
+      new — the upsert absorbing the rest.
+      FINDINGS worth keeping: 4 sources advertise validators and then ignore them
+      (return 200 anyway), so the 200-despite-conditional path has to be ordinary, not
+      an error. And the VN sources have the weakest HTTP hygiene — Viblo, VnExpress
+      and GenK offer no validators at all; only ZNews and TopDev 304. The bandwidth win
+      is concentrated in the international half.
+      `FeedFetcherConditionalTest` (9 tests) covers it against a JDK stub server — no
+      container, no network. 27/27 green with the other unit tests.
 
 ### Dedup — the interesting problem, do it in layers
 - [ ] URL canonicalization: strip `utm_*`, fragments, sort query params → `canonical_url`
@@ -564,4 +595,32 @@ YYYY-MM-DD  Phase 0  —
                      rebuild before trusting a container run.
                      Next: politeness (conditional GET is nearly free — etag/
                      last_modified columns already exist), then layered dedup.
+2026-07-23  Phase 1  Conditional GET done. FeedFetcher now sends If-None-Match /
+                     If-Modified-Since and returns a sealed FetchResult.
+                     THE BUG THIS FEATURE IS PRONE TO, found in our own existing code:
+                     `check(status in 200..299)` was already there from Phase 0, and
+                     304 is NOT 2xx — so the moment conditional requests started
+                     working, the best possible outcome would have raised an exception,
+                     fed the retry/backoff machinery, and eventually marked healthy
+                     sources dead. Would have looked like a flaky network for a week.
+                     Check 304 before the success check; sealed type so "nothing
+                     changed" can't be confused with "nothing came back".
+                     MEASURED rather than assumed: probed all 20 sources with a
+                     fetch-then-refetch. 10/20 honour it; 1.05MB of 2.05MB saved on a
+                     no-change poll (~51%). Verified end-to-end in the app over two
+                     passes: pass 1 all 200 + validators stored for 16 sources, pass 2
+                     → 10x 304. All 40 jobs succeeded, zero failures, validators
+                     retained, 304s logged items 0/0.
+                     Two findings I did not expect. (1) Four sources ADVERTISE
+                     validators then ignore them and return 200 anyway — so that path
+                     must be ordinary, not an error. (2) The VN sources have the
+                     weakest HTTP hygiene of the set: Viblo, VnExpress, GenK offer no
+                     validators at all. The saving is concentrated in the
+                     international half, which is worth saying plainly in the README
+                     rather than implying a uniform 51%.
+                     Also ticked "Real User-Agent with contact URL" — true since Phase
+                     0, just never ticked.
+                     FeedFetcherConditionalTest (9 tests) against a JDK stub HttpServer
+                     — no container, no network, deterministic. 27/27 unit tests green.
+                     Next: per-domain rate limit + robots.txt, then layered dedup.
 ```

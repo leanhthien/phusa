@@ -4,6 +4,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import vn.phusa.domain.Source
 import vn.phusa.ingest.FeedFetcher
+import vn.phusa.ingest.FetchResult
 import vn.phusa.ingest.RssIngestService
 import vn.phusa.ingest.SourceConfigCodec
 import java.lang.management.ManagementFactory
@@ -85,29 +86,58 @@ class CrawlWorker(
 
         try {
             val config = configCodec.read(sourceStub(job))
-            val feed = fetcher.fetch(feedUrl, config)
-            // Transaction #3 — opened and closed inside RssIngestService.
-            val result = ingest.ingest(sourceStub(job).apply { id = job.sourceId }, feed, config)
+            // Conditional GET: hand back whatever validators we stored last time.
+            val fetched = fetcher.fetch(feedUrl, config, job.httpEtag, job.httpLastModified)
 
-            val now = Instant.now()
-            jobs.markSucceeded(job.jobId, now)
-            jobs.recordSourceOutcome(job.sourceId, success = true, now = now, backoffSeconds = 0)
-            jobs.logAttempt(
-                jobId = job.jobId,
-                sourceId = job.sourceId,
-                httpStatus = 200,
-                durationMs = elapsedMs(started),
-                itemsFound = result.fetched,
-                itemsNew = result.written,
-                error = null,
-            )
-            log.info(
-                "  {} ok: {} found, {} new ({}ms)",
-                job.sourceSlug, result.fetched, result.written, elapsedMs(started),
-            )
+            when (fetched) {
+                is FetchResult.NotModified -> finishNotModified(job, elapsedMs(started))
+                is FetchResult.Fetched -> {
+                    // Transaction #3 — opened and closed inside RssIngestService.
+                    val result = ingest.ingest(sourceStub(job), fetched.feed, config)
+
+                    val now = Instant.now()
+                    // Validators are stored only on a 200 — see storeValidators.
+                    jobs.storeValidators(job.sourceId, fetched.etag, fetched.lastModified)
+                    jobs.markSucceeded(job.jobId, now)
+                    jobs.recordSourceOutcome(job.sourceId, success = true, now = now, backoffSeconds = 0)
+                    jobs.logAttempt(
+                        jobId = job.jobId,
+                        sourceId = job.sourceId,
+                        httpStatus = 200,
+                        durationMs = elapsedMs(started),
+                        itemsFound = result.fetched,
+                        itemsNew = result.written,
+                        error = null,
+                    )
+                    log.info(
+                        "  {} ok: {} found, {} new ({}ms){}",
+                        job.sourceSlug, result.fetched, result.written, elapsedMs(started),
+                        if (fetched.etag != null || fetched.lastModified != null) " [validators stored]" else "",
+                    )
+                }
+            }
         } catch (e: Exception) {
             finishFailed(job, e.message ?: e::class.simpleName ?: "unknown error", null, elapsedMs(started))
         }
+    }
+
+    /**
+     * 304: the server confirmed our copy is current. This is a SUCCESS — the cheapest
+     * possible one — so the job succeeds, consecutive_failures resets, and the source's
+     * next crawl is scheduled normally. No ingest runs (there is no body), and the
+     * stored validators are left exactly as they are.
+     *
+     * Logged at debug, not info: once conditional GET is working most polls end here,
+     * and an info line per source per interval would drown the log in non-events.
+     */
+    private fun finishNotModified(job: ClaimedJob, durationMs: Int) {
+        val now = Instant.now()
+        jobs.markSucceeded(job.jobId, now)
+        jobs.recordSourceOutcome(job.sourceId, success = true, now = now, backoffSeconds = 0)
+        // items 0/0 rather than NULL: nothing was found because nothing changed, which
+        // is different from an error, where counts are genuinely unknown.
+        jobs.logAttempt(job.jobId, job.sourceId, FeedFetcher.HTTP_NOT_MODIFIED, durationMs, 0, 0, null)
+        log.debug("  {} 304 not modified ({}ms) — no body transferred", job.sourceSlug, durationMs)
     }
 
     private fun finishFailed(job: ClaimedJob, error: String, httpStatus: Int?, durationMs: Int) {
