@@ -182,7 +182,47 @@ The part that actually differentiates this from a CRUD app.
       existed), all 20 sources crawled green through the job queue on the first run —
       407 items found, 401 new, zero failures. Slowest was martinfowler (13.0s),
       fastest znews (0.23s). Article table 144 → 543.
-- [ ] jsoup + readability-style extraction for feed-less sites
+- [~] jsoup + readability-style extraction for feed-less sites
+      — `ArticleExtractor`: strip never-content elements, score paragraph-ish blocks by
+      prose-likeness (length + comma count), propagate each score to ancestors halving
+      per level so the immediate container beats `<body>`, then penalise by LINK DENSITY.
+      Link density is the sharpest single signal: nav ~1.0, "related" lists ~0.9, real
+      prose <0.15.
+      NOT A DEPENDENCY, on purpose: boilerpipe/crawler4j are unmaintained and Readability4J
+      is a thin wrapper over exactly this heuristic. It is ~100 lines, it IS the
+      interesting part of the problem, and owning it means tuning against this project's
+      own sources — half Vietnamese, none of them in anyone's tuning corpus.
+      MEASURED against one real page from each of 16 sources: **14 extract**, ratios
+      22-95% of raw page text, link density 0-22% on the winners, and the extracted heads
+      are the actual article in both English and Vietnamese.
+      THE BUG THIS SHOOK OUT, which is the whole reason to measure instead of eyeball:
+      the first junk-removal pass silently destroyed 2 of 14 pages.
+      • github.blog is WordPress, whose `<body>` class list describes the page LAYOUT and
+        contains `no-sidebar`. Matching `sidebar` in that string deleted the entire
+        document — a class announcing the ABSENCE of junk removed the article
+        (23,528 chars -> null).
+      • vnexpress.net nests `<article class="fck_detail">` inside `<div class="sidebar-1">`,
+        which holds 92% of the page text. The name is just wrong about its contents.
+      GENERAL LESSON, now encoded as a guard + two regression tests: a class name
+      describes an element's role in the LAYOUT, not the nature of its CONTENTS, and
+      removing an element removes everything inside it. So a junk-looking class is only
+      acted on when the element is also small (<40% of page text), and `html`/`body` are
+      never candidates.
+      THREE HTTP-LAYER FINDINGS, none of them extraction problems:
+      • **znews.vn returns gzip even when the client never sent `Accept-Encoding`** — a
+        protocol violation, but real. It looked like a dead extractor (0 `<p>` in 43k
+        chars) and was actually 53KB of gzip bytes. Decompressed it extracts fine (64%).
+        CONSEQUENCE FOR THE FETCHER: **Java's HttpClient does NOT transparently decompress
+        gzip**, so the article fetcher must handle Content-Encoding explicitly or this
+        source silently yields garbage.
+      • Ars Technica answers the bot with HTTP **202 and a 157-char challenge page**;
+        InfoQ with **405**. Both survive a retry with browser-ish Accept headers. FEED
+        ACCESS DOES NOT IMPLY ARTICLE ACCESS — both feeds work fine.
+      • Extraction must return null rather than a plausible stub for those pages, or the
+        challenge text gets hashed and stored as the article. Tested.
+      Fixtures are SYNTHETIC and encode the traps rather than copying real pages —
+      third-party article text, hundreds of KB, and it rots. 9 tests. 63/63 unit green.
+      NOT YET WIRED TO THE NETWORK, and deliberately so — see the politeness note below.
 - [ ] Playwright-Java for JS-rendered sites — **only if a real source demands it**
 
 ### Job queue
@@ -239,7 +279,23 @@ The part that actually differentiates this from a CRUD app.
 
 ### Politeness (this is a portfolio piece — being a bad citizen is a bad look)
 - [ ] robots.txt respected and cached
-- [ ] Per-domain rate limit
+      — NOW A HARD BLOCKER, not a nice-to-have. The extractor turns crawling from 20
+      feed requests per cycle into ~922 article requests, against sites that never
+      opted into anything.
+- [ ] Per-domain rate limit — **must be keyed on the article's HOST, not the source**
+      — MEASURED: Hacker News points at **51 distinct hosts across 59 articles** and
+      Lobsters at **71 across 76**. `source.rate_limit_per_min` is therefore the wrong
+      key for aggregators: one Lobsters extraction job would touch 71 unrelated domains,
+      and a per-source limit would happily let us hammer any one of them. The limiter has
+      to derive its bucket from the URL's host.
+      Also note `crawl_job_live_uk UNIQUE(source_id, job_type) WHERE state IN
+      ('pending','running')` means there can only ever be ONE live `fetch_article` job
+      per source — so extraction has to be a per-source BATCH job, not a job per article.
+      That constraint is a gift: one job per source is naturally serialised, which is
+      most of a rate limiter already.
+      Third finding: reddit-programming's canonical URLs are all `reddit.com` comment
+      pages, not articles — extracting them yields Reddit UI text, so it needs excluding
+      or special-casing rather than extracting.
 - [x] Real User-Agent with a contact URL
       — `PhuSaBot/0.1 (+https://github.com/leanhthien/phusa)`, since Phase 0. Landed
       early; ticking it now that the politeness section is being worked properly.
@@ -799,4 +855,45 @@ YYYY-MM-DD  Phase 0  —
                      Next: the jsoup extractor is now on the critical path — it unblocks
                      content_hash for the other 15 sources AND is the prerequisite for
                      simhash (layer 3), which needs the same bodies.
+
+2026-07-28 (2)      jsoup readability extractor — the ALGORITHM, measured against one
+                     real page from each of 16 sources. 14 extract cleanly. Marked [~]
+                     because it is deliberately NOT wired to the network yet.
+                     Wrote it rather than pulling a dependency: boilerpipe/crawler4j are
+                     unmaintained, Readability4J wraps this same heuristic, it is ~100
+                     lines, and half this project's sources are Vietnamese and in nobody
+                     else's tuning corpus.
+                     THE BUG THAT JUSTIFIES MEASURING RATHER THAN EYEBALLING: my first
+                     junk-removal pass silently deleted 2 of 14 articles, and both were
+                     the same mistake. github.blog's WordPress `<body>` class contains
+                     `no-sidebar` — a class announcing the ABSENCE of junk deleted the
+                     whole document. vnexpress nests its article inside a div named
+                     `sidebar-1` holding 92% of the page. A class name describes an
+                     element's role in the LAYOUT, not what it CONTAINS, and deleting an
+                     element deletes everything inside it. Guard + 2 regression tests.
+                     I did not loosen a threshold to make the NULLs go away — I
+                     instrumented the ancestor chain and found the actual rule at fault.
+                     Worth remembering: the tempting fix (drop MIN_ARTICLE_CHARS) would
+                     have hidden the bug and kept both pages broken.
+                     THREE HTTP FINDINGS THAT ARE NOT THE EXTRACTOR'S FAULT, all of which
+                     constrain the fetcher I have not written yet:
+                     (1) znews.vn returns gzip WITHOUT being asked, and Java's HttpClient
+                     does not transparently decompress — it looked like a broken
+                     extractor and was 53KB of gzip bytes. Decompressed: 64% extraction.
+                     (2) Ars Technica bot-challenges with HTTP 202 + a 157-char page,
+                     InfoQ with 405 — feed access does not imply article access.
+                     (3) Those pages must extract to NULL, never to a plausible stub, or
+                     the challenge text gets hashed and stored as the article.
+                     STOPPED BEFORE WIRING IT UP, on purpose. Extraction takes this from
+                     20 feed requests per cycle to ~922 article requests against sites
+                     that never opted in, and the measurements say the obvious rate-limit
+                     design is wrong: HN points at 51 distinct hosts across 59 articles,
+                     Lobsters 71 across 76, so the limiter must key on the URL's HOST and
+                     not on source.rate_limit_per_min. Shipping the fetch loop before
+                     robots.txt + per-host limiting would be exactly the bad-citizen
+                     behaviour this section exists to prevent.
+                     63/63 unit tests green.
+                     Next: robots.txt + per-host rate limiter, THEN wire fetch_article
+                     (per-source batch job — crawl_job_live_uk allows only one live job
+                     per source/type, which conveniently serialises it).
 ```
