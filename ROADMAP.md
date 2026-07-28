@@ -323,7 +323,58 @@ The part that actually differentiates this from a CRUD app.
       `UrlCanonicalizerTest` 15 tests, half of them asserting the rejected rules DON'T
       apply — an over-eager canonicalizer merges two real articles and the loser is
       unrecoverable. 42/42 unit tests green.
-- [ ] Exact: SHA-256 of normalized body → `content_hash`
+- [~] Exact: SHA-256 of normalized body → `content_hash`
+      — `ContentNormalizer` (strip tags via jsoup → strip zero-width → collapse
+      whitespace → trim → SHA-256) + `article_content` written straight from the feed
+      where the feed carries the real article. PARTIAL ON PURPOSE: 5 of 20 sources ship
+      full text, so the other 15 stay NULL until the extractor lands. `content_hash` is
+      populated for 69 articles; the layer is correct and idempotent but has caught
+      **0 duplicates so far**, which is the honest result — exact-body matches need
+      syndication, and the 5 full-text sources are topically disjoint. It earns its keep
+      when the extractor gives all 20 sources bodies.
+      MEASURED ALL 20 FEEDS FIRST. Full text: github-blog, android-developers, topdev,
+      devto, kotlin-blog (median ~5000-6600 normalized chars). Everything else is a
+      teaser (8-1094).
+      WHY IT IS DECLARED PER-SOURCE (`SourceConfig.feedHasFullContent`) AND NOT DETECTED
+      — both obvious heuristics were tested and both fail:
+      • ELEMENT NAME fails. Dev.to ships the whole post in plain `<description>`; Tinh tế
+        ships a 516-char teaser in `<content:encoded>`, the element that supposedly means
+        full content. So `richestBody` takes the LONGEST element, not the best-named one.
+      • LENGTH ALONE is unsafe. After normalization there is a clean 4.6x gap
+        (~5000 vs ~1094) — but that gap only exists BECAUSE of normalization, and the raw
+        numbers lie: the Stack Overflow blog's "1445-char body" is 190 chars of text plus
+        **1160 zero-width padding characters** (86% of the payload). A rule that stays
+        correct only while normalization stays perfect is a rule that breaks silently.
+      THE CASE THE FLOOR EXISTS FOR: the Lobsters feed ships the byte-identical body
+      "Comments" for all 25 items. A naive body hash marks 24 real articles as duplicates
+      of the 25th, and nothing about that is visible from the outside.
+      `MIN_HASHABLE_CHARS = 500` is a BACKSTOP, not the classifier — it sits in a wide
+      empty band (longest pathological body 378, shortest real full-text ~5000). Below it
+      `hash()` returns NULL, and `article_content_hash_idx` is partial
+      (`WHERE content_hash IS NOT NULL`) so unhashed rows cost nothing.
+      Zero-width stripping is measured, not defensive: checked twice, the padding is
+      STABLE across fetches (identical SHA-256), so it does not destabilise the hash —
+      but it wrecks every length judgement and would break a hash comparison against any
+      copy that had been through a system which strips it.
+      A teaser is never written to `article_content.text_plain`: storing one under that
+      name poisons every later layer that trusts it to be the article, and the FTS
+      trigger would index the teaser as the body. `extractor='feed'` records provenance
+      so a later pass can tell "already have the real article" from "have what the feed
+      gave us".
+      VERIFIED end-to-end: 69 bodies stored across the 5 declared sources, 0 below the
+      floor, 0 hashes on the other 15, FTS trigger fired on all 69 (`search_tsv` set —
+      body search had nothing to index before this). Second crawl: 0 written, 0 bodies,
+      `extracted_at` unchanged — the `IS DISTINCT FROM` guard matters here because
+      writing `text_plain` rebuilds the tsvector, so an unguarded write would re-index
+      every article every crawl.
+      UNEXPECTED FINDING, and it is layer 1 and layer 2 working together: a github.blog
+      post was first discovered via **Hacker News** on 2026-07-23; today github-blog's own
+      feed carried the same canonical URL, matched on `url_hash`, and enriched the
+      existing row instead of duplicating it. Consequence worth designing for later:
+      `article.source_id` means FIRST DISCOVERER, not publisher — that article is
+      attributed to HN. A real fix is an `article_source` join table (many-to-many);
+      noted, not done, because it is a schema change well beyond this layer.
+      `ContentNormalizerTest` 12 tests. 54/54 unit tests green.
 - [ ] Near: simhash of body → `simhash`, Hamming distance threshold
 - [ ] Headline: pg_trgm similarity within a 48h window
 - [ ] Semantic: embeddings (Phase 4 — catches syndication the others miss)
@@ -708,4 +759,44 @@ YYYY-MM-DD  Phase 0  —
                      on this Mac — pre-existing, unrelated.
                      Next: robots.txt + per-domain rate limit, then dedup layers 2-4
                      (content_hash, simhash, pg_trgm headline).
+
+2026-07-28          Dedup layer 2: content_hash. Marked [~], not [x], and the reason is
+                     the whole story — `article_content` was EMPTY (0 rows), so "SHA-256
+                     of normalized body" had no body to hash. content_hash is not
+                     paired with the jsoup extractor, it is BLOCKED on it.
+                     What was deliverable without the extractor: the 5 of 20 sources
+                     whose feeds already carry the full article. Measured all 20 before
+                     writing anything.
+                     Two heuristics tested and REJECTED on evidence — element name (Dev.to
+                     puts full posts in <description>, Tinh tế puts teasers in
+                     <content:encoded>) and length alone (Stack Overflow's "1445-char
+                     body" is 190 chars of text plus 1160 zero-width padding characters,
+                     86% invisible). So the flag is declared per source and the length
+                     floor is only a backstop.
+                     The floor exists because Lobsters ships the identical body
+                     "Comments" for all 25 items — a naive hash marks 24 real articles as
+                     duplicates of the 25th, invisibly.
+                     TWO OF MY OWN CLAIMS CORRECTED MID-TASK, both by checking rather than
+                     assuming. (1) I suspected the zero-width padding was per-fetch
+                     tracking that would destabilise the hash; fetched twice, identical
+                     SHA-256 — it is stable, and I said so instead of leaving the scarier
+                     story standing. (2) My first probe reported three VN feeds as
+                     0-item/broken; they were 301/302 redirects and curl was not following
+                     them. FeedFetcher sets Redirect.NORMAL, so the app was fine and the
+                     PROBE was broken — same class of mistake as the earlier `grep -c`
+                     bug. Probes need verifying before their output becomes a finding.
+                     HONEST RESULT: 69 bodies hashed, **0 duplicates caught**. The layer
+                     is correct and proven idempotent, but exact-body matching needs
+                     syndication and the 5 full-text sources are topically disjoint. It
+                     pays off when the extractor gives all 20 sources bodies. Better to
+                     record a zero than to imply the layer is working.
+                     BONUS FINDING: a github.blog post first discovered via Hacker News
+                     got enriched, not duplicated, when github-blog's own feed found the
+                     same canonical URL — layers 1 and 2 co-operating. It also exposes
+                     that `article.source_id` means first-discoverer, not publisher.
+                     `article_source` join table is the real fix; noted, not done.
+                     54/54 unit tests green.
+                     Next: the jsoup extractor is now on the critical path — it unblocks
+                     content_hash for the other 15 sources AND is the prerequisite for
+                     simhash (layer 3), which needs the same bodies.
 ```

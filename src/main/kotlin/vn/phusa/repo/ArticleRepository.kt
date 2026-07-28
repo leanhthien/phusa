@@ -32,13 +32,19 @@ interface ArticleRepository : JpaRepository<Article, Long> {
     @Modifying
     @Query(
         value = """
-            INSERT INTO article (source_id, canonical_url, title, summary, published_at, status)
-            VALUES (:sourceId, :canonicalUrl, :title, :summary, :publishedAt, 'published')
+            INSERT INTO article (source_id, canonical_url, title, summary, published_at, status,
+                                 content_hash, word_count)
+            VALUES (:sourceId, :canonicalUrl, :title, :summary, :publishedAt, 'published',
+                    :contentHash, :wordCount)
             ON CONFLICT ON CONSTRAINT article_url_hash_uk DO UPDATE
                SET title = EXCLUDED.title,
-                   summary = EXCLUDED.summary
-             WHERE article.title   IS DISTINCT FROM EXCLUDED.title
-                OR article.summary IS DISTINCT FROM EXCLUDED.summary
+                   summary = EXCLUDED.summary,
+                   content_hash = COALESCE(EXCLUDED.content_hash, article.content_hash),
+                   word_count   = COALESCE(EXCLUDED.word_count,   article.word_count)
+             WHERE article.title        IS DISTINCT FROM EXCLUDED.title
+                OR article.summary      IS DISTINCT FROM EXCLUDED.summary
+                OR (EXCLUDED.content_hash IS NOT NULL
+                    AND article.content_hash IS DISTINCT FROM EXCLUDED.content_hash)
         """,
         nativeQuery = true,
     )
@@ -48,5 +54,48 @@ interface ArticleRepository : JpaRepository<Article, Long> {
         @Param("title") title: String,
         @Param("summary") summary: String?,
         @Param("publishedAt") publishedAt: Instant,
+        @Param("contentHash") contentHash: ByteArray?,
+        @Param("wordCount") wordCount: Int?,
+    ): Int
+
+    /**
+     * Stores the article body, keyed by URL rather than by id.
+     *
+     * WHY NOT RETURN THE ID FROM [upsert] AND USE IT HERE: because `ON CONFLICT DO
+     * UPDATE ... WHERE <changed>` returns NO ROW when the guard suppresses the update —
+     * which is the common case, an unchanged article. A `RETURNING id` there hands back
+     * nothing precisely when the row does exist, so every caller would need a fallback
+     * SELECT. Looking the row up by `url_hash` instead keeps one statement with no
+     * special case, and it uses `article_url_hash_uk` so the lookup is an index probe.
+     *
+     * `INSERT ... SELECT` also means a missing article yields zero rows rather than an
+     * FK violation — content for an article that failed to insert is simply skipped.
+     *
+     * The `IS DISTINCT FROM` guard matters more here than on `article`: writing
+     * `text_plain` fires `article_content_tsv_update`, which rebuilds the tsvector. Re-
+     * writing an unchanged 6KB body on every crawl would mean re-indexing every article
+     * on every crawl, for nothing.
+     */
+    @Modifying
+    @Query(
+        value = """
+            INSERT INTO article_content (article_id, text_plain, html, extractor)
+            SELECT a.id, :textPlain, :html, :extractor
+              FROM article a
+             WHERE a.url_hash = digest(:canonicalUrl, 'sha256')
+            ON CONFLICT (article_id) DO UPDATE
+               SET text_plain   = EXCLUDED.text_plain,
+                   html         = EXCLUDED.html,
+                   extractor    = EXCLUDED.extractor,
+                   extracted_at = now()
+             WHERE article_content.text_plain IS DISTINCT FROM EXCLUDED.text_plain
+        """,
+        nativeQuery = true,
+    )
+    fun upsertContent(
+        @Param("canonicalUrl") canonicalUrl: String,
+        @Param("textPlain") textPlain: String,
+        @Param("html") html: String?,
+        @Param("extractor") extractor: String,
     ): Int
 }

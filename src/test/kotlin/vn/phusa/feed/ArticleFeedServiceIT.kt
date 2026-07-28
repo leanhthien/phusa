@@ -43,6 +43,8 @@ class ArticleFeedServiceIT @Autowired constructor(
                 title = "Article $i",
                 summary = null,
                 publishedAt = base.minusSeconds(i.toLong()),
+                contentHash = null,
+                wordCount = null,
             )
         }
 

@@ -48,6 +48,30 @@ data class SourceConfig(
      * able to dominate a crawl cycle. Unset -> take everything the feed returned.
      */
     val maxItems: Int? = null,
+
+    /**
+     * Does this feed carry the whole article, or only a teaser?
+     *
+     * MEASURED, NOT GUESSED — all 20 sources were probed and the split is 5 / 15.
+     * Full text: github-blog, android-developers, topdev, devto, kotlin-blog.
+     *
+     * This has to be declared per source because both obvious automatic rules fail:
+     *  - ELEMENT NAME doesn't work. Dev.to ships the full post in plain `<description>`,
+     *    while Tinh tế ships a 516-character teaser in `<content:encoded>` — the element
+     *    that supposedly means "full content".
+     *  - LENGTH alone is unsafe. It looks separable after normalization (a 4.6x gap:
+     *    ~5000 for the lowest full-text source vs ~1094 for the highest teaser), but the
+     *    raw numbers lie — the Stack Overflow blog's "1445-char body" is 190 characters
+     *    of text plus 1160 invisible padding characters. A rule that depends on getting
+     *    normalization exactly right in order to stay correct is a rule that breaks the
+     *    first time a feed does something new.
+     *
+     * So the declaration is authoritative and [ContentNormalizer.MIN_HASHABLE_CHARS] is
+     * the backstop for when it's wrong. Unset -> false, i.e. assume a teaser: the safe
+     * direction, because a missed hash costs a dedup opportunity while a wrong hash
+     * marks real articles as duplicates.
+     */
+    val feedHasFullContent: Boolean? = null,
 ) {
     companion object {
         val DEFAULTS = SourceConfig()

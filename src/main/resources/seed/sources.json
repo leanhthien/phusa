@@ -7,7 +7,7 @@
     "feedUrl": "https://dev.to/feed",
     "language": "en",
     "crawlIntervalSec": 900,
-    "config": { "maxItems": 30 }
+    "config": { "maxItems": 30, "feedHasFullContent": true }
   },
   {
     "slug": "hackernews",
@@ -43,7 +43,8 @@
     "kind": "rss",
     "feedUrl": "https://github.blog/feed/",
     "language": "en",
-    "crawlIntervalSec": 21600
+    "crawlIntervalSec": 21600,
+    "config": { "feedHasFullContent": true }
   },
   {
     "slug": "stackoverflow-blog",
@@ -90,7 +91,8 @@
     "kind": "rss",
     "feedUrl": "https://blog.jetbrains.com/kotlin/feed/",
     "language": "en",
-    "crawlIntervalSec": 21600
+    "crawlIntervalSec": 21600,
+    "config": { "feedHasFullContent": true }
   },
   {
     "slug": "android-developers",
@@ -100,7 +102,7 @@
     "feedUrl": "https://android-developers.googleblog.com/feeds/posts/default",
     "language": "en",
     "crawlIntervalSec": 21600,
-    "config": { "maxItems": 25 }
+    "config": { "maxItems": 25, "feedHasFullContent": true }
   },
   {
     "slug": "arstechnica",
@@ -176,7 +178,8 @@
     "kind": "rss",
     "feedUrl": "https://topdev.vn/blog/feed",
     "language": "vi",
-    "crawlIntervalSec": 21600
+    "crawlIntervalSec": 21600,
+    "config": { "feedHasFullContent": true }
   },
   {
     "slug": "znews-congnghe",
