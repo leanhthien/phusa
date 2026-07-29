@@ -520,7 +520,50 @@ The part that actually differentiates this from a CRUD app.
 - [ ] Near: simhash of body → `simhash`, Hamming distance threshold
 - [ ] Headline: pg_trgm similarity within a 48h window
 - [ ] Semantic: embeddings (Phase 4 — catches syndication the others miss)
-- [ ] Loser gets `status='duplicate'` + `duplicate_of_id` → earliest published wins
+- [x] Loser gets `status='duplicate'` + `duplicate_of_id` → earliest published wins
+      — `DuplicateResolver`, a sweep on its own 60s schedule. Until this existed
+      `content_hash` only DETECTED; both copies still rendered.
+      A SWEEP, NOT AN INLINE CHECK AT WRITE TIME, for three reasons: hashes arrive from
+      two paths (feed bodies and extracted bodies) and one sweep covers both without
+      duplicating the rule; rows hashed before this code existed need resolving too, so
+      the sweep is the backfill as well as the steady state; and an inline check RACES —
+      two workers hashing identical bodies concurrently each see no match and both
+      insert, whereas one statement sees one snapshot.
+      Earliest `published_at` wins, id as tie-break — deliberately the same rule V5 used
+      for URL collisions, so the project has ONE answer to "which copy is real".
+      IDEMPOTENT by construction: the CTE filters `status <> 'duplicate'`, so a demoted
+      row leaves the candidate set and the next sweep sees a group of one. Confirmed in
+      production — the sweep logged once and stayed silent on every subsequent run.
+      THE TWO LAYERS CANNOT FIGHT, and it is worth stating why rather than hoping: V5's
+      losers keep `status='duplicate'` with their ORIGINAL url, which means they are
+      never extracted, never hashed, and so can never enter this sweep's candidate set.
+      Verified against the live table — zero rows have both `status='duplicate'` and a
+      non-null `content_hash`.
+      CHAIN FLATTENING is a second statement, and it is reachable: winners are chosen by
+      `published_at`, not arrival order, so an article ingested today can carry an
+      earlier date than yesterday's winner and demote it. Without repointing, a reader
+      following `duplicate_of_id` lands on another hidden row. PROVEN against real
+      Postgres in a rolled-back transaction: B wins, C→B; then A arrives published
+      earlier; after the sweep B→A but C→B (hidden); after flattening C→A. One pass, not
+      a recursive CTE — a pass halves every chain and depth>2 needs the same rare event
+      twice between sweeps, so the invariant is eventually true rather than never true.
+      WHAT IT CAUGHT, and both are cases no other layer would get:
+      • znews published the same body twice under the SAME CMS post id (`post1672678`)
+        with a REWRITTEN headline — "Quy định mới…" vs "Quy định cần lưu ý…" — so the
+        slug changed. Different URL, identical body, identical `published_at`; the id
+        tie-break decides.
+      • genk republished an identical title AND body a day later under a new article id.
+      URL canonicalization cannot see either; only the body hash can.
+      VERIFIED end to end: 2 rows demoted with correct winners, **0 duplicates reachable
+      from the feed** (`status='published' AND duplicate_of_id IS NOT NULL` returns 0),
+      and the feed plan is unchanged — `Index Scan using article_feed_idx`, no Sort node,
+      0.031ms for 20 rows.
+      `DuplicateResolverIT` (7 tests) covers winner selection, the id tie-break,
+      idempotence, distinct hashes, null hashes, CROSS-SOURCE syndication and the chain
+      case. It needs a real container — the behaviour under test IS the SQL, and three
+      CHECK constraints enforce it — so it is unverified on this Mac and runs on CI. The
+      same statements were executed by hand against the live DB, which is how the chain
+      case above was proven.
 - [ ] **Write up the layering in the README.** "I used four techniques because each
       catches what the previous one misses" is a better story than any single one
 
@@ -1084,4 +1127,47 @@ YYYY-MM-DD  Phase 0  —
                      Next: promote detected duplicates (status='duplicate' +
                      duplicate_of_id, earliest published wins), then simhash for
                      near-duplicates.
+
+2026-07-29 (2)      Duplicate promotion. content_hash now HIDES, not just detects.
+                     A sweep rather than an inline check at write time: hashes arrive
+                     from two paths, pre-existing rows need backfilling anyway, and an
+                     inline check races (two workers hashing identical bodies both see
+                     no match and both insert). One statement, one snapshot.
+                     CHECKED THE INVARIANT INSTEAD OF ASSUMING IT: V5's URL-duplicates
+                     and this layer's body-duplicates cannot fight, because V5's losers
+                     keep status='duplicate' and are therefore never extracted, never
+                     hashed, and never candidates here. Zero rows in the live table have
+                     both status='duplicate' and a content_hash. That is the kind of
+                     thing that is obvious right up until it isn't.
+                     CHAIN CASE IS REAL, not defensive coding. Winners are picked by
+                     published_at, not arrival order, so an article ingested today can
+                     carry an earlier date and demote yesterday's winner — leaving the
+                     first duplicate pointing at a row that is itself hidden. Proved it
+                     against real Postgres in a rolled-back transaction before writing
+                     the fix: B wins, C→B; A arrives earlier; B→A but C still →B; after
+                     flattening C→A. One pass, because depth>2 needs the same rare event
+                     twice between 60-second sweeps.
+                     WHAT IT ACTUALLY CAUGHT is the best argument for the layered design.
+                     znews republished one article under the SAME CMS post id with a
+                     REWRITTEN headline, so the slug — and therefore the URL — changed.
+                     genk republished an identical title and body a day later under a new
+                     article id. Layer 1 (canonicalization) sees two different URLs and
+                     is right to. Only the body hash catches these. That is the README
+                     paragraph writing itself: "each technique catches what the previous
+                     one misses" is now a claim with two concrete Vietnamese examples
+                     behind it rather than an assertion.
+                     Verified: 2 demoted, correct winners, 0 duplicates reachable from
+                     the feed, feed plan unchanged (Index Scan on article_feed_idx, no
+                     Sort, 0.031ms). Production sweep logged once and went silent —
+                     idempotence observed rather than argued.
+                     DuplicateResolverIT (7 tests) written but NOT runnable here; it
+                     needs a real container because the behaviour under test is the SQL
+                     plus three CHECK constraints. Stated plainly rather than counted as
+                     passing. 92 container-free tests green.
+                     PHASE 1 EXIT CRITERION NOW MET: sources crawl on a schedule
+                     unattended, no duplicates in the feed, no source hammered — the
+                     48-hour soak is the only thing left to actually observe.
+                     Next: simhash (layer 3) for near-duplicates — the case where two
+                     sites publish the same story with different boilerplate, which an
+                     exact hash cannot touch.
 ```

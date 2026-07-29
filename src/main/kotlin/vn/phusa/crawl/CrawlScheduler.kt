@@ -4,6 +4,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
+import vn.phusa.dedup.DuplicateResolver
 import vn.phusa.extract.ArticleExtractionWorker
 import java.time.Instant
 
@@ -24,6 +25,7 @@ class CrawlScheduler(
     private val jobs: CrawlJobDao,
     private val worker: CrawlWorker,
     private val extraction: ArticleExtractionWorker,
+    private val duplicates: DuplicateResolver,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -70,6 +72,21 @@ class CrawlScheduler(
         if (queued > 0) log.info("Enqueued {} extraction job(s)", queued)
         val worked = extraction.runBatch()
         if (worked > 0) log.debug("Worked {} extraction job(s)", worked)
+    }
+
+    /**
+     * Resolve detected duplicates into hidden ones.
+     *
+     * Cheap and idempotent — demoted rows leave the candidate set, so a sweep that finds
+     * nothing is two index-backed statements that update zero rows. Run on its own
+     * schedule rather than at the end of [extract] because hashes also arrive from the
+     * feed path, and a duplicate should not stay visible until the next extraction cycle
+     * happens to run.
+     */
+    @Scheduled(fixedDelayString = "\${phusa.crawl.dedup-interval-ms:60000}", initialDelayString = "20000")
+    fun dedup() {
+        val result = duplicates.resolve()
+        if (result.demoted > 0) log.info("Hid {} duplicate article(s)", result.demoted)
     }
 
     /**
