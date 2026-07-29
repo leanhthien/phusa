@@ -567,12 +567,19 @@ The part that actually differentiates this from a CRUD app.
       lets it FINISH, the same "predicate has no memory" flaw V6 fixed: 17 of 655 bodies
       are under the fingerprint floor and would be re-read and re-rejected forever.
       `SimhashTest` 9 tests. 101 container-free tests green.
-      ⚠ FOUND WHILE MEASURING, filed separately: two viblo articles extract to identical
-      bodies because the page embeds a sibling article's full text and the extractor takes
-      the longest prose block — a FALSE POSITIVE that hid a real article (6542). viblo is
-      Nuxt SSR and the article's own body is client-rendered. 1 of 40 viblo articles
-      affected; genk/vnexpress/znews collisions are genuine. This may be the real source
-      that finally demands the Playwright path.
+      NOT A FALSE POSITIVE — investigated and the first diagnosis was wrong. Two viblo
+      articles (6529/6542) extract to identical bodies, and the reason is that viblo
+      SERVES identical bodies: `div.md-contents`, the article's own body container, has
+      the same SHA-256 on both pages, and the "diff()/DateInterval" article's body never
+      mentions diff() or DateInterval anywhere. Those words appear only in `<title>`,
+      `<meta>` and `<h1>`, which is what misled the first read — seeing them in the HTML
+      and inferring the real body was present and we had picked the wrong block. There is
+      no embedded sibling article. Confirmed across three fetches including cache-busted
+      ones, and the per-page metadata differs ("Chủ Nhật, 5:06 CH" vs "Saturday, 2:51
+      p.m."), so the pages are individually rendered and only the stored body is shared —
+      an author republishing one post's text under a second title. The extractor picked
+      the right element, `content_hash` detected a genuine duplicate, and hiding one copy
+      is the correct outcome. Nothing to fix.
 - [ ] Headline: pg_trgm similarity within a 48h window
 - [ ] Semantic: embeddings (Phase 4 — catches syndication the others miss)
 - [x] Loser gets `status='duplicate'` + `duplicate_of_id` → earliest published wins
@@ -1258,18 +1265,36 @@ YYYY-MM-DD  Phase 0  —
                      again, this time inside a join.
                      Banding (4 bands of 16, pigeonhole) documented as the next step and
                      deliberately NOT built — structure without a measurement.
-                     ⚠ FOUND A REAL BUG WHILE MEASURING, filed as a separate task: two
-                     viblo articles extract to byte-identical bodies, so content_hash
-                     demoted one — a FALSE POSITIVE that hid a real article. The pages
-                     genuinely differ; viblo is Nuxt SSR, the article body is
-                     client-rendered, and the only server-rendered prose is an embedded
-                     sibling article, which "longest prose block wins" happily takes.
-                     1 of 40 viblo articles; the genk/vnexpress/znews collisions are
-                     genuine duplicates. Worth stating plainly: layer 2's false-positive
-                     risk is not theoretical, and it is inherited from extraction quality
-                     rather than from the hashing.
+                     ⚠ SUSPECTED A FALSE POSITIVE in two viblo articles extracting to
+                     identical bodies. The suspicion was WRONG — see the correction below.
                      101 container-free tests green.
-                     Next: pg_trgm headline similarity (layer 4) — or fix the viblo
-                     extraction first, since every dedup layer inherits extraction's
-                     mistakes.
+                     Next: pg_trgm headline similarity (layer 4).
+
+2026-07-29 (4)      CORRECTION to the viblo "extraction bug" recorded above. There is no
+                     bug. Investigated with jsoup instead of grepping raw HTML and the
+                     picture reversed completely.
+                     `div.md-contents` — the article's OWN body container, not a sidebar
+                     and not a related-posts block — has the identical SHA-256 on both
+                     pages, and the diff()/DateInterval article's body never mentions
+                     diff() or DateInterval at all. Those words live only in <title>,
+                     <meta> and <h1>. Verified across three fetches including cache-busted
+                     ones, and the per-page bylines differ ("Chủ Nhật, 5:06 CH" vs
+                     "Saturday, 2:51 p.m."), so each page is rendered individually and
+                     only the stored BODY is shared — an author republishing one post's
+                     text under a second title. The extractor picked the correct element,
+                     content_hash found a genuine duplicate, and hiding one copy is right.
+                     WHERE THE WRONG DIAGNOSIS CAME FROM, which is the useful part: I
+                     grepped the raw HTML for 'diff()', found it, and concluded the real
+                     body was present and we had selected the wrong block. The string was
+                     in the title and meta tags. Searching markup as TEXT answers "does
+                     this string appear anywhere", never "does this string appear in the
+                     content" — different questions whenever the subject is a DOM. Same
+                     class of error as the earlier `grep -c` counting lines instead of
+                     matches, and the curl probe that reported redirects as dead feeds.
+                     Parse before concluding.
+                     Also worth keeping: this had already been written up as a confirmed
+                     bug, filed as a follow-up task and put in a commit message before it
+                     was checked with the right tool. The evidence (two pages, identical
+                     output) was real; the explanation was invented to fit it.
+                     No code changed. Follow-up task withdrawn.
 ```
