@@ -278,24 +278,61 @@ The part that actually differentiates this from a CRUD app.
       ~8 min, 1800s in ~23 min — the per-source interval the old scheduler ignored).
 
 ### Politeness (this is a portfolio piece — being a bad citizen is a bad look)
-- [ ] robots.txt respected and cached
-      — NOW A HARD BLOCKER, not a nice-to-have. The extractor turns crawling from 20
-      feed requests per cycle into ~922 article requests, against sites that never
-      opted into anything.
-- [ ] Per-domain rate limit — **must be keyed on the article's HOST, not the source**
-      — MEASURED: Hacker News points at **51 distinct hosts across 59 articles** and
-      Lobsters at **71 across 76**. `source.rate_limit_per_min` is therefore the wrong
-      key for aggregators: one Lobsters extraction job would touch 71 unrelated domains,
-      and a per-source limit would happily let us hammer any one of them. The limiter has
-      to derive its bucket from the URL's host.
-      Also note `crawl_job_live_uk UNIQUE(source_id, job_type) WHERE state IN
-      ('pending','running')` means there can only ever be ONE live `fetch_article` job
-      per source — so extraction has to be a per-source BATCH job, not a job per article.
-      That constraint is a gift: one job per source is naturally serialised, which is
-      most of a rate limiter already.
-      Third finding: reddit-programming's canonical URLs are all `reddit.com` comment
-      pages, not articles — extracting them yields Reddit UI text, so it needs excluding
-      or special-casing rather than extracting.
+- [x] robots.txt respected and cached
+      — `RobotsTxtParser` (RFC 9309, hand-written) + `RobotsService` (fetch, cache,
+      apply). Wired into `CrawlWorker` BEFORE the feed request, not just in front of the
+      future article fetcher.
+      **THE FINDING THAT MADE THIS URGENT: we were already violating two sources.**
+      lobste.rs and www.reddit.com both publish `User-agent: *` / `Disallow: /`, and we
+      have been fetching `lobste.rs/rss` and `reddit.com/r/programming/.rss` every 15
+      minutes since Phase 0. This was not a future risk introduced by the extractor — it
+      was live, and it only surfaced because the politeness work started with reading the
+      actual files. lobste.rs even carries a comment asking crawlers to stop "respecting"
+      robots.txt and start honestly following the standard.
+      VERIFIED against all 20 real robots.txt files: **2 of 20 feed URLs disallowed**,
+      18 allowed. After wiring: 14x 200, 12x 304, 4x "blocked by robots.txt", zero
+      consecutive_failures on the blocked sources.
+      PARSER TRAPS, each one exercised by a real source file:
+      • CONSECUTIVE `User-agent:` lines share ONE group — lobste.rs lists 7 allowed bots
+        before a single `Allow: /`. Treating each as its own group loses the rules.
+      • GROUP SELECTION is most-specific, not first-match. theverge.com has 106 groups,
+        vnexpress.net 54.
+      • `Disallow:` with an EMPTY value means allow-all, the opposite of `Disallow: /`.
+        hnrss.org depends on exactly this.
+      • Longest-match wins and Allow beats an equal-length Disallow (RFC 9309 §2.2.2).
+        Sites write `Disallow: /` then `Allow: /blog/`; file-order evaluation blocks the
+        whole site, which is how people conclude robots.txt is unusable.
+      • Wildcards `*` and `$` are mandatory, not optional — dev.to has 16 such lines.
+      • Agent matching is EXACT on the product token, or `User-agent: bot` would capture
+        PhuSaBot.
+      STATUS-CODE SEMANTICS: 4xx -> allow-all (§2.3.1.3), 5xx or network failure ->
+      DISALLOW (§2.3.1.4). Guessing in our own favour when the host's wishes are unknown
+      is the entire problem, and a struggling host is exactly when hammering is worst.
+      Caching is not an optimisation: without it, obeying robots.txt would DOUBLE the
+      request count and make the polite implementation ruder than the impolite one.
+      24h TTL on answers, 30min on failures.
+- [x] Per-domain rate limit — **keyed on HOST, not source**
+      — `HostRateLimiter`. MEASURED justification: Hacker News's articles point at **51
+      distinct hosts across 59 articles**, Lobsters' at **71 across 76**.
+      `source.rate_limit_per_min` is therefore the wrong key — one aggregator job would
+      issue 76 "polite" requests while sending several at one small blog in the same
+      second. The bucket must be the thing that feels the load.
+      NOT a token bucket, deliberately: a bucket permits bursts by design, and 20
+      requests in the first second of a minute satisfies "20/min" while being exactly
+      what a small site experiences as an attack. A minimum inter-request GAP cannot
+      burst.
+      A host's own `Crawl-delay` wins whenever it is slower than our 3s floor —
+      news.ycombinator.com asks for 30s. Honouring a request to slow down costs nothing.
+      Port is not part of the key: :80 and :443 are one machine and one set of resources.
+      Single-process in-memory; goes to Redis when this becomes multi-instance, or each
+      instance will independently believe it is being polite. Noted, not pre-built.
+      NOTE for the extractor: `crawl_job_live_uk UNIQUE(source_id, job_type) WHERE state
+      IN ('pending','running')` allows only ONE live `fetch_article` job per source, so
+      extraction must be a per-source BATCH job rather than a job per article. That
+      constraint is a gift — one job per source is naturally serialised.
+      Still open: reddit-programming's canonical URLs are reddit.com comment pages rather
+      than articles, so it needs excluding from extraction regardless of robots (it is
+      now blocked at the feed anyway).
 - [x] Real User-Agent with a contact URL
       — `PhuSaBot/0.1 (+https://github.com/leanhthien/phusa)`, since Phase 0. Landed
       early; ticking it now that the politeness section is being worked properly.
@@ -896,4 +933,57 @@ YYYY-MM-DD  Phase 0  —
                      Next: robots.txt + per-host rate limiter, THEN wire fetch_article
                      (per-source batch job — crawl_job_live_uk allows only one live job
                      per source/type, which conveniently serialises it).
+
+2026-07-28 (3)      robots.txt + per-host rate limiter. Both [x].
+                     THE HEADLINE IS NOT THE FEATURE, IT IS WHAT THE FEATURE FOUND:
+                     **we were already violating two sources.** lobste.rs and
+                     www.reddit.com both publish `User-agent: * / Disallow: /`, and we
+                     have been pulling their feeds every 15 minutes since Phase 0. I went
+                     in expecting to build a guard for the FUTURE article extractor and
+                     discovered a live, ongoing violation of the CURRENT feed crawler.
+                     It surfaced only because the work started by reading the actual 20
+                     files instead of writing a parser against the spec and assuming.
+                     lobste.rs carries a comment asking crawlers to stop "respecting"
+                     robots.txt and start honestly following the standard. Fair.
+                     ACTION REQUIRED FROM THE OWNER: `reddit-programming` and `lobsters`
+                     are now skipped automatically, but they are still in seed and
+                     CLAUDE.md still lists Reddit as an approved source. That line needs
+                     revisiting — the honest path to Reddit is their official API with
+                     credentials, not routing around robots.txt. Left the seed alone on
+                     purpose: which sources this project carries is the owner's call, and
+                     enforcement already prevents the harm.
+                     THE PARSER IS HAND-WRITTEN because the traps are the point, and each
+                     one is exercised by a real source file: consecutive User-agent lines
+                     share one group (lobste.rs, 7 bots); most-specific group wins, not
+                     first (theverge 106 groups, vnexpress 54); empty `Disallow:` means
+                     allow-all (hnrss.org); longest-match with Allow winning ties, or
+                     `Disallow: / + Allow: /blog/` blocks the whole site; wildcards are
+                     mandatory (dev.to, 16 lines); exact token matching, or
+                     `User-agent: bot` captures PhuSaBot.
+                     RATE LIMITER IS KEYED ON HOST, and the numbers are why: HN's
+                     articles span 51 hosts across 59 articles, Lobsters' 71 across 76.
+                     Per-source limiting would let one job hammer a small blog while
+                     technically obeying its own limit. Also a minimum GAP rather than a
+                     token bucket — a bucket bursts by design, and a burst is what a
+                     small site experiences as an attack.
+                     BUG CAUGHT ON THE FIRST LIVE RUN, worth keeping: hnrss.org lost one
+                     TLS handshake, the unreachable->disallow rule correctly blocked it,
+                     and the worker then deferred the source by the SUCCESS TTL — 24h —
+                     for a cache entry that expires in 30min. One network blip silenced
+                     Hacker News for a day. Fixed by deferring exactly until the cached
+                     answer expires (`secondsUntilRecheck`), because only the cache knows
+                     whether it is holding a real Disallow or a failure verdict.
+                     Confirmed on the re-run: hnrss 200 and due again in 0.2h, the two
+                     genuinely-blocked sources deferred 24h, consecutive_failures 0 on
+                     all three — a policy is not a failure.
+                     KOTLIN GOTCHA THAT COST TEN MINUTES: block comments NEST, unlike
+                     Java's. A KDoc line documenting the literal pattern slash-star-dot-json
+                     opened a nested comment that never closed, and the compiler reported
+                     10 cascading "unresolved reference" errors pointing at other files.
+                     The real error was two lines from the bottom of the output.
+                     85 unit tests, 0 failures (5 Testcontainers ITs still blocked on this
+                     Mac, pre-existing).
+                     Next: wire fetch_article now that the politeness floor exists —
+                     per-source batch job, robots-checked per ARTICLE URL (aggregator
+                     links are third-party), gzip handling for znews.
 ```

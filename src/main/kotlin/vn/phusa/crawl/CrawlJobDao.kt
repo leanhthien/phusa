@@ -236,6 +236,33 @@ class CrawlJobDao(
     )
 
     /**
+     * Push a source's next due time out WITHOUT recording a failure.
+     *
+     * For the robots.txt case specifically: the source is not broken and nothing failed,
+     * so incrementing `consecutive_failures` would be a lie that eventually marks a
+     * perfectly healthy site as dying. But re-asking every `crawl_interval_sec` is
+     * pointless too — the answer cannot change until the cached robots.txt expires. So
+     * this defers by the robots TTL and leaves the failure counters alone.
+     *
+     * Deliberately re-checked rather than permanently disabled: a site's robots.txt can
+     * change, and a crawler that gives up forever on one 24-hour-old answer is as wrong
+     * as one that never asks.
+     */
+    fun deferSource(sourceId: Long, now: Instant, seconds: Long): Int =
+        jdbc.update(
+            """
+            UPDATE source
+               SET last_crawled_at = :now,
+                   next_crawl_at   = :now::timestamptz + make_interval(secs => :seconds)
+             WHERE id = :id
+            """.trimIndent(),
+            MapSqlParameterSource()
+                .addValue("id", sourceId)
+                .addValue("now", now.atOffset(ZoneOffset.UTC))
+                .addValue("seconds", seconds),
+        )
+
+    /**
      * Push the source's next due time out and record the outcome.
      *
      * On failure `next_crawl_at` backs off on `consecutive_failures`, so a dead site is

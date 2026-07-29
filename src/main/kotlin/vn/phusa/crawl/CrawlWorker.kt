@@ -47,6 +47,8 @@ class CrawlWorker(
     private val ingest: RssIngestService,
     private val configCodec: SourceConfigCodec,
     private val props: CrawlProperties,
+    private val robots: RobotsService,
+    private val limiter: HostRateLimiter,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -86,6 +88,23 @@ class CrawlWorker(
 
         try {
             val config = configCodec.read(sourceStub(job))
+
+            // POLITENESS GATE — before any request to the origin, including the feed.
+            // This is not only about the article extractor: measured against the live
+            // seed, 2 of 20 FEEDS were already being fetched against the host's stated
+            // wishes (lobste.rs and www.reddit.com both publish `User-agent: * /
+            // Disallow: /`). The check belongs here, on the shared path, not bolted to
+            // whichever feature happened to prompt it.
+            if (!robots.isAllowed(feedUrl)) {
+                finishDisallowed(job, feedUrl, elapsedMs(started))
+                return
+            }
+
+            // A host's own Crawl-delay wins whenever it is slower than our floor —
+            // news.ycombinator.com asks for 30s, ten times the default.
+            val waited = limiter.acquire(feedUrl, robots.crawlDelay(feedUrl, RobotsService.DEFAULT_GAP))
+            if (!waited.isZero) log.debug("  {} waited {}ms for its host slot", job.sourceSlug, waited.toMillis())
+
             // Conditional GET: hand back whatever validators we stored last time.
             val fetched = fetcher.fetch(feedUrl, config, job.httpEtag, job.httpLastModified)
 
@@ -138,6 +157,35 @@ class CrawlWorker(
         // is different from an error, where counts are genuinely unknown.
         jobs.logAttempt(job.jobId, job.sourceId, FeedFetcher.HTTP_NOT_MODIFIED, durationMs, 0, 0, null)
         log.debug("  {} 304 not modified ({}ms) — no body transferred", job.sourceSlug, durationMs)
+    }
+
+    /**
+     * The host's robots.txt forbids this URL.
+     *
+     * NOT a failure. Nothing is broken, no retry could help, and incrementing
+     * `consecutive_failures` would eventually mark a healthy site as dying for the crime
+     * of having a policy. The job succeeds, the source is deferred by the robots cache
+     * TTL (the answer cannot change sooner), and the reason is recorded in `crawl_log`
+     * so "why is this source empty?" has an answer in the data rather than only in a log
+     * file that has since rotated.
+     *
+     * Logged at WARN because it means a *configured* source is not being collected —
+     * that is a fact the operator has to see, not a routine event to bury at debug.
+     */
+    private fun finishDisallowed(job: ClaimedJob, url: String, durationMs: Int) {
+        val now = Instant.now()
+        // Defer only until the cached robots answer expires. A confirmed Disallow holds
+        // for the 24h success TTL; a fetch-failure verdict holds for the 30min failure
+        // TTL. Using one fixed number here silenced Hacker News for a day over a single
+        // TLS handshake blip — see RobotsService.secondsUntilRecheck.
+        val recheckSec = robots.secondsUntilRecheck(url)
+        jobs.markSucceeded(job.jobId, now)
+        jobs.deferSource(job.sourceId, now, recheckSec)
+        jobs.logAttempt(job.jobId, job.sourceId, null, durationMs, 0, 0, "blocked by robots.txt")
+        log.warn(
+            "  {} SKIPPED: {} is disallowed by robots.txt for {} — not crawling, re-checking in ~{}min",
+            job.sourceSlug, url, RobotsService.PRODUCT_TOKEN, recheckSec / 60,
+        )
     }
 
     private fun finishFailed(job: ClaimedJob, error: String, httpStatus: Int?, durationMs: Int) {
