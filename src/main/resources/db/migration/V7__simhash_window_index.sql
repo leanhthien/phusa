@@ -1,0 +1,47 @@
+-- V7 — make the near-duplicate sweep's 48-hour window an index range, not a filter.
+--
+-- THE PROBLEM, measured rather than assumed. The layer-3 sweep joins `article` to itself
+-- to find pairs within a Hamming distance of 3. Hamming distance is NOT indexable by
+-- btree — btree orders by magnitude, and two fingerprints one bit apart can be at
+-- opposite ends of that order — so the distance test can only ever be a filter. The
+-- question is how many rows it gets applied to.
+--
+-- Without this index Postgres materialises the whole fingerprinted set and loops:
+--
+--   Nested Loop
+--     Rows Removed by Join Filter: 401956        <-- 634 x 634, a full cartesian product
+--     ->  Index Scan using article_pkey on article l  (rows=634)
+--     ->  Materialize
+--           ->  Seq Scan on article w                 (rows=634)
+--   Execution Time: 13.517 ms
+--
+-- With it, the 48-hour window becomes an index range and each article only meets its
+-- own neighbourhood:
+--
+--   Nested Loop
+--     ->  Index Scan using article_pkey on article l  (rows=634)
+--     ->  Index Scan using article_simhash_window_idx on article w  (loops=634)
+--           Index Cond: ((ROW(published_at, id) < ROW(l.published_at, l.id))
+--                        AND (published_at > (l.published_at - '48:00:00'::interval)))
+--           Rows Removed by Filter: 121           <-- 121, not 634
+--   Execution Time: 12.853 ms
+--
+-- The wall-clock numbers are almost identical because 634 rows live in shared_buffers
+-- and a seq scan over them is nearly free. That is exactly why this is worth doing NOW
+-- rather than "when it gets slow": the timing hides the change, but the COMPLEXITY CLASS
+-- went from O(n^2) in the whole corpus to O(n x window). At 500k articles the first form
+-- is 250 billion comparisons and the second is still bounded by however many articles
+-- were published in two days.
+--
+-- COLUMN ORDER IS (published_at, id) so the row-value comparison
+-- `(w.published_at, w.id) < (l.published_at, l.id)` can be answered as a single index
+-- range condition — the same keyset technique the feed query uses for pagination, doing
+-- the same job inside a join. The OR-expanded form would plan far worse.
+--
+-- Partial on the two predicates the sweep always applies: a row without a fingerprint
+-- can never match, and a row already resolved as a duplicate is never a winner. That
+-- keeps the index to the rows actually eligible rather than the whole table.
+
+CREATE INDEX article_simhash_window_idx
+    ON article (published_at, id)
+    WHERE simhash IS NOT NULL AND status <> 'duplicate';

@@ -86,7 +86,7 @@ class CrawlScheduler(
     @Scheduled(fixedDelayString = "\${phusa.crawl.dedup-interval-ms:60000}", initialDelayString = "20000")
     fun dedup() {
         val result = duplicates.resolve()
-        if (result.demoted > 0) log.info("Hid {} duplicate article(s)", result.demoted)
+        if (result.demoted + result.near > 0) log.info("Hid {} duplicate article(s) ({} near)", result.demoted + result.near, result.near)
     }
 
     /**

@@ -517,7 +517,62 @@ The part that actually differentiates this from a CRUD app.
       attributed to HN. A real fix is an `article_source` join table (many-to-many);
       noted, not done, because it is a schema change well beyond this layer.
       `ContentNormalizerTest` 12 tests. 54/54 unit tests green.
-- [ ] Near: simhash of body → `simhash`, Hamming distance threshold
+- [x] Near: simhash of body → `simhash`, Hamming distance threshold
+      — `Simhash` (64-bit, 3-word shingles, frequency-weighted bit voting) + a sweep step
+      in `DuplicateResolver` + `V7` for the window index. Catches what layers 1-2 cannot:
+      the same story with a sentence changed — a correction, a publisher's own intro, a
+      different photo caption. SHA-256 is built to destroy that relationship; simhash is
+      LOCALITY-SENSITIVE on purpose, so "how different" becomes "how many bits differ".
+      SHINGLES NOT WORDS is the decision that makes it work. A word-level simhash is a
+      bag-of-words fingerprint and two different articles on one subject collide
+      constantly; 3-word shingles capture PHRASING rather than topic.
+      THRESHOLD 3 IS MEASURED, NOT INHERITED. Manku et al. (WWW 2007) give 3 for 64-bit
+      fingerprints; checked against this corpus — 528 documents, 139,128 pairs:
+        distance 0: 4 pairs (all four already-known exact duplicates)
+        distance 1-14: **ZERO pairs**
+        distance 15: 5, 16: 7, 17: 8, 18: 39, 19: 68, 20: 164 …
+      A twelve-bit empty band sits between "duplicate" and "nearest unrelated pair", so
+      anything from 3 to 14 behaves identically here. 3 is the conservative end, which
+      means the margin only has to hold as the corpus grows.
+      HONEST RESULT: layer 3 currently demotes **nothing** that `content_hash` had not
+      already caught. It is the syndication layer and this corpus has no syndication —
+      every source publishes its own writing. Recorded as a zero, exactly as
+      `content_hash` was recorded as zero before extraction gave it bodies.
+      LENGTH SENSITIVITY, measured because the first test failed and the failure was
+      informative: simhash distance tracks the FRACTION of a document that changed, so
+      appending one sentence moves 4 bits at 504 chars, 1 bit at 1,701 and 0 bits from
+      3,399 upward. The corpus runs 600-3,300 words, comfortably in the stable regime.
+      Tests use realistic-length documents for that reason — asserting a 3-bit threshold
+      against a toy paragraph tests the wrong regime.
+      V7 CHANGES THE COMPLEXITY CLASS, and the EXPLAIN is the artifact. Hamming distance
+      is not btree-indexable (two fingerprints one bit apart can be at opposite ends of
+      the magnitude order), so the distance test is always a filter — the only question
+      is how many rows it runs against. Without the index: `Nested Loop`, **401,956 rows
+      removed by join filter**, a full 634x634 product with a `Seq Scan` + `Materialize`.
+      With it: `Index Scan using article_simhash_window_idx`, the 48h window as an
+      **Index Cond**, 121 rows examined per article. Wall time barely moves (13.5ms ->
+      12.9ms) because 634 rows live in shared_buffers — which is precisely why it was
+      worth doing now: the timing hides a change from O(n²) to O(n x window). At 500k the
+      first form is 250 billion comparisons.
+      The window uses the ROW-VALUE form `(w.published_at, w.id) < (l.published_at, l.id)`
+      — the same keyset technique as the feed, doing the same job inside a join, and it
+      also guarantees each pair is considered in one direction only so two halves of a
+      duplicate can never demote each other.
+      NEXT STEP AT SCALE, documented not built: Manku-style banding — 4 bands of 16 bits,
+      index each, require an exact match on one, which pigeonhole guarantees for distance
+      <= 3. Not built because it would be structure with no measurement behind it.
+      Fingerprinting lives in the resolver, not the writers: bodies arrive from two paths
+      and threading a simhash argument through both means two places that must remember.
+      The backfill filters `length(text_plain) >= 500` — not an optimisation but what
+      lets it FINISH, the same "predicate has no memory" flaw V6 fixed: 17 of 655 bodies
+      are under the fingerprint floor and would be re-read and re-rejected forever.
+      `SimhashTest` 9 tests. 101 container-free tests green.
+      ⚠ FOUND WHILE MEASURING, filed separately: two viblo articles extract to identical
+      bodies because the page embeds a sibling article's full text and the extractor takes
+      the longest prose block — a FALSE POSITIVE that hid a real article (6542). viblo is
+      Nuxt SSR and the article's own body is client-rendered. 1 of 40 viblo articles
+      affected; genk/vnexpress/znews collisions are genuine. This may be the real source
+      that finally demands the Playwright path.
 - [ ] Headline: pg_trgm similarity within a 48h window
 - [ ] Semantic: embeddings (Phase 4 — catches syndication the others miss)
 - [x] Loser gets `status='duplicate'` + `duplicate_of_id` → earliest published wins
@@ -1170,4 +1225,51 @@ YYYY-MM-DD  Phase 0  —
                      Next: simhash (layer 3) for near-duplicates — the case where two
                      sites publish the same story with different boilerplate, which an
                      exact hash cannot touch.
+
+2026-07-29 (3)      Simhash, layer 3. Implemented, measured, and it currently catches
+                     NOTHING beyond what content_hash already had — recorded as a zero
+                     rather than dressed up, because the corpus has no syndication yet.
+                     Same shape as content_hash before extraction existed.
+                     THRESHOLD CHOSEN BY MEASUREMENT, not by citing the paper. 528
+                     documents, 139,128 pairs: 4 at distance 0, then NOTHING until 15.
+                     A twelve-bit empty band, so 3 through 14 behave identically here and
+                     3 is simply the conservative end. Being able to say "I checked" is
+                     the difference between a threshold and a magic number.
+                     TWO OF MY OWN TESTS FAILED AND BOTH FAILURES WERE THE POINT. A
+                     "small edit" moved 13 bits — because my test document was ~600 chars
+                     and a one-sentence change is proportionally huge there. Measured
+                     across lengths: 4 bits at 504 chars, 1 at 1,701, 0 from 3,399 up.
+                     Simhash distance tracks the FRACTION changed, which is correct LSH
+                     behaviour; my test was in the wrong regime, not the algorithm. My
+                     first probe of that was ALSO wrong — it replaced every occurrence of
+                     a phrase, so the "edit" scaled with document length. Fixed the probe,
+                     then the test.
+                     V7 IS THE INTERESTING DB WORK. Hamming distance cannot be
+                     btree-indexed, so the distance test is always a filter — the only
+                     question is how many rows it meets. Without an index the planner
+                     built a full 634x634 product: "Rows Removed by Join Filter: 401956".
+                     With (published_at, id) WHERE simhash IS NOT NULL, the 48h window
+                     becomes an Index Cond and each article meets 121 neighbours.
+                     13.5ms -> 12.9ms, i.e. NO VISIBLE IMPROVEMENT — and that is the
+                     lesson worth keeping: at 634 rows everything is in shared_buffers so
+                     timing cannot see the difference between O(n²) and O(n x window).
+                     Trusting the clock here would have meant shipping a query that dies
+                     at 500k. The row-value comparison from keyset pagination turns up
+                     again, this time inside a join.
+                     Banding (4 bands of 16, pigeonhole) documented as the next step and
+                     deliberately NOT built — structure without a measurement.
+                     ⚠ FOUND A REAL BUG WHILE MEASURING, filed as a separate task: two
+                     viblo articles extract to byte-identical bodies, so content_hash
+                     demoted one — a FALSE POSITIVE that hid a real article. The pages
+                     genuinely differ; viblo is Nuxt SSR, the article body is
+                     client-rendered, and the only server-rendered prose is an embedded
+                     sibling article, which "longest prose block wins" happily takes.
+                     1 of 40 viblo articles; the genk/vnexpress/znews collisions are
+                     genuine duplicates. Worth stating plainly: layer 2's false-positive
+                     risk is not theoretical, and it is inherited from extraction quality
+                     rather than from the hashing.
+                     101 container-free tests green.
+                     Next: pg_trgm headline similarity (layer 4) — or fix the viblo
+                     extraction first, since every dedup layer inherits extraction's
+                     mistakes.
 ```
