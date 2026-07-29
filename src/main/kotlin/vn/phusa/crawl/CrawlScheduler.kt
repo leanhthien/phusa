@@ -4,6 +4,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
+import vn.phusa.extract.ArticleExtractionWorker
 import java.time.Instant
 
 /**
@@ -22,6 +23,7 @@ import java.time.Instant
 class CrawlScheduler(
     private val jobs: CrawlJobDao,
     private val worker: CrawlWorker,
+    private val extraction: ArticleExtractionWorker,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -48,6 +50,26 @@ class CrawlScheduler(
     fun work() {
         val worked = worker.runBatch()
         if (worked > 0) log.debug("Worked {} job(s)", worked)
+    }
+
+    /**
+     * Enqueue and work article extraction.
+     *
+     * Separate from [enqueue] and [work] on purpose, and on a much slower cadence.
+     * Extraction is the expensive half of this system — feeds are 20 requests per cycle,
+     * extraction is hundreds — so it gets its own schedule that can be slowed or
+     * disabled without touching feed ingestion.
+     *
+     * Enqueue and work in one method here because, unlike feeds, there is nothing to
+     * gain from separating them: a source is due for extraction whenever it has
+     * unextracted articles, which the enqueue query already establishes.
+     */
+    @Scheduled(fixedDelayString = "\${phusa.crawl.extract-interval-ms:300000}", initialDelayString = "45000")
+    fun extract() {
+        val queued = jobs.enqueueExtractionWork(Instant.now(), ArticleExtractionWorker.MAX_EXTRACT_ATTEMPTS)
+        if (queued > 0) log.info("Enqueued {} extraction job(s)", queued)
+        val worked = extraction.runBatch()
+        if (worked > 0) log.debug("Worked {} extraction job(s)", worked)
     }
 
     /**

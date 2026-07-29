@@ -8,6 +8,9 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 
 /** A claimed unit of work, joined to the source it belongs to. */
+/** An article awaiting a body. */
+data class PendingArticle(val id: Long, val canonicalUrl: String)
+
 data class ClaimedJob(
     val jobId: Long,
     val sourceId: Long,
@@ -94,7 +97,16 @@ class CrawlJobDao(
      * HTTP fetch would pin a connection, defeat SKIP LOCKED entirely, and leave rows
      * locked with no way for another process to tell whether the worker was alive.
      */
-    fun claimBatch(worker: String, batchSize: Int, leaseSeconds: Long, now: Instant): List<ClaimedJob> =
+    /**
+     * [jobType] is NOT optional and there is deliberately no default.
+     *
+     * Until `fetch_article` existed, every row in `crawl_job` was a `fetch_feed` and the
+     * claim ignored `job_type` — harmless while there was one type, and a live bug the
+     * instant there were two: the feed worker would happily claim an article job and try
+     * to parse an HTML page as RSS. Making the parameter required means adding a third
+     * job type later cannot silently reintroduce that.
+     */
+    fun claimBatch(worker: String, jobType: String, batchSize: Int, leaseSeconds: Long, now: Instant): List<ClaimedJob> =
         jdbc.query(
             """
             UPDATE crawl_job j
@@ -107,6 +119,7 @@ class CrawlJobDao(
                    SELECT c.id
                      FROM crawl_job c
                     WHERE c.state = 'pending'
+                      AND c.job_type = :jobType
                       AND c.scheduled_at <= :now
                       AND c.attempt < c.max_attempts
                     ORDER BY c.scheduled_at
@@ -122,6 +135,7 @@ class CrawlJobDao(
             """.trimIndent(),
             MapSqlParameterSource()
                 .addValue("worker", worker)
+                .addValue("jobType", jobType)
                 .addValue("batchSize", batchSize)
                 .addValue("leaseSeconds", leaseSeconds)
                 .addValue("now", now.atOffset(ZoneOffset.UTC)),
@@ -323,6 +337,117 @@ class CrawlJobDao(
         MapSqlParameterSource().addValue("id", sourceId),
         Int::class.java,
     ) ?: 0
+
+    /**
+     * Enqueue one `fetch_article` job per source that still has articles worth trying.
+     *
+     * One job per SOURCE, not per article — `crawl_job_live_uk` is
+     * `UNIQUE(source_id, job_type) WHERE state IN ('pending','running')`, so a job per
+     * article is not expressible. That constraint turns out to be exactly right: one
+     * live job per source serialises the work naturally, which is most of a rate limiter
+     * before [HostRateLimiter] does anything.
+     *
+     * `EXISTS` rather than a join + DISTINCT: it stops at the first qualifying article
+     * per source instead of building the whole set and deduplicating it.
+     */
+    fun enqueueExtractionWork(now: Instant, maxAttempts: Int): Int = jdbc.update(
+        """
+        INSERT INTO crawl_job (source_id, job_type, state, scheduled_at)
+        SELECT s.id, 'fetch_article', 'pending', :now
+          FROM source s
+         WHERE s.enabled
+           AND EXISTS (
+                 SELECT 1 FROM article a
+                  WHERE a.source_id = s.id
+                    AND a.status <> 'duplicate'
+                    AND a.extract_attempts < :maxAttempts
+                    AND NOT EXISTS (SELECT 1 FROM article_content c WHERE c.article_id = a.id)
+               )
+        ON CONFLICT (source_id, job_type) WHERE state IN ('pending', 'running')
+        DO NOTHING
+        """.trimIndent(),
+        MapSqlParameterSource()
+            .addValue("now", now.atOffset(ZoneOffset.UTC))
+            .addValue("maxAttempts", maxAttempts),
+    )
+
+    /**
+     * The next articles to try for one source, newest first.
+     *
+     * Newest-first because a reader wants today's article to have a body; a three-week-
+     * old backlog entry can wait. Backed by `article_extract_pending_idx`
+     * `(source_id, published_at DESC) WHERE extract_attempts < 3 AND status <> 'duplicate'`.
+     */
+    fun articlesNeedingExtraction(sourceId: Long, limit: Int, maxAttempts: Int): List<PendingArticle> =
+        jdbc.query(
+            """
+            SELECT a.id, a.canonical_url
+              FROM article a
+             WHERE a.source_id = :sourceId
+               AND a.status <> 'duplicate'
+               AND a.extract_attempts < :maxAttempts
+               AND NOT EXISTS (SELECT 1 FROM article_content c WHERE c.article_id = a.id)
+             ORDER BY a.published_at DESC
+             LIMIT :limit
+            """.trimIndent(),
+            MapSqlParameterSource()
+                .addValue("sourceId", sourceId)
+                .addValue("limit", limit)
+                .addValue("maxAttempts", maxAttempts),
+        ) { rs, _ -> PendingArticle(rs.getLong("id"), rs.getString("canonical_url")) }
+
+    /** Bumped on every try, win or lose — it is what stops an unextractable page forever. */
+    fun bumpExtractAttempt(articleId: Long): Int = jdbc.update(
+        "UPDATE article SET extract_attempts = extract_attempts + 1 WHERE id = :id",
+        MapSqlParameterSource().addValue("id", articleId),
+    )
+
+    /**
+     * Store an extracted body and the hash/word count derived from it.
+     *
+     * Two statements rather than one, because they touch different tables; both run
+     * inside the caller's transaction. The `IS DISTINCT FROM` guard on `article_content`
+     * matters for the same reason as in the feed path — writing `text_plain` fires the
+     * tsvector trigger, and re-indexing an unchanged body is pure waste.
+     */
+    fun storeExtraction(
+        articleId: Long,
+        textPlain: String,
+        html: String?,
+        extractor: String,
+        contentHash: ByteArray?,
+        wordCount: Int?,
+    ): Int {
+        jdbc.update(
+            """
+            INSERT INTO article_content (article_id, text_plain, html, extractor)
+            VALUES (:articleId, :textPlain, :html, :extractor)
+            ON CONFLICT (article_id) DO UPDATE
+               SET text_plain   = EXCLUDED.text_plain,
+                   html         = EXCLUDED.html,
+                   extractor    = EXCLUDED.extractor,
+                   extracted_at = now()
+             WHERE article_content.text_plain IS DISTINCT FROM EXCLUDED.text_plain
+            """.trimIndent(),
+            MapSqlParameterSource()
+                .addValue("articleId", articleId)
+                .addValue("textPlain", textPlain)
+                .addValue("html", html)
+                .addValue("extractor", extractor),
+        )
+        return jdbc.update(
+            """
+            UPDATE article
+               SET content_hash = COALESCE(:contentHash, content_hash),
+                   word_count   = COALESCE(:wordCount, word_count)
+             WHERE id = :articleId
+            """.trimIndent(),
+            MapSqlParameterSource()
+                .addValue("articleId", articleId)
+                .addValue("contentHash", contentHash)
+                .addValue("wordCount", wordCount),
+        )
+    }
 
     /** Queue depth by state — the number the Phase 6 Grafana dashboard graphs. */
     fun countsByState(): Map<String, Int> = jdbc.query(

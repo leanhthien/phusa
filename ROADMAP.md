@@ -367,6 +367,55 @@ The part that actually differentiates this from a CRUD app.
       is concentrated in the international half.
       `FeedFetcherConditionalTest` (9 tests) covers it against a JDK stub server — no
       container, no network. 27/27 green with the other unit tests.
+- [x] `fetch_article` job wired — extraction runs unattended
+      — `ArticleFetcher` + `ArticleExtractionWorker` + V6, driven by a separate
+      `@Scheduled` on a 5-minute cadence so the expensive half of the system can be
+      slowed or switched off without touching feed ingestion.
+      LATENT BUG FOUND AND FIXED FIRST: `claimBatch` did not filter `job_type`. Harmless
+      while every row was a `fetch_feed`, and a live bug the instant a second type
+      existed — the feed worker would have claimed article jobs and parsed HTML pages as
+      RSS. `jobType` is now a required parameter with no default, so a third type cannot
+      silently reintroduce it.
+      SHAPE FORCED BY THE SCHEMA, and it turned out right: `crawl_job_live_uk
+      UNIQUE(source_id, job_type) WHERE state IN ('pending','running')` makes a
+      job-per-article impossible, so it is one job per source over a batch of 20 —
+      which serialises each source's fetches by construction.
+      POLITENESS IS PER ARTICLE URL, not per source. Lobsters' bodies came from
+      blog.calif.io, spectrum.ieee.org, intertwingly.net — third parties that never
+      opted in. robots.txt is consulted for the ARTICLE's origin and the limiter buckets
+      on the ARTICLE's host; checking the source's host would be asking the wrong party.
+      V6 adds `article.extract_attempts` because the natural predicate ("no
+      article_content row") has NO MEMORY — an unextractable page is re-selected every
+      cycle forever. Not hypothetical: Ars Technica 202s and InfoQ 405s every article.
+      A counter rather than a boolean so one network blip is retried and a permanently
+      broken page is abandoned. `crawl_log` could not hold this: it is keyed per SOURCE
+      with no article_id, and widening it would blur what that table means.
+      ATTEMPTS ARE BUMPED BEFORE THE FETCH, not after. Crediting only a clean finish is
+      how a crawler ends up in an infinite loop against the one page that reliably kills
+      the process.
+      MEASURED on the real backlog: viblo 20/20, znews 20/20, devto 19/20, github 3/3,
+      topdev 2/2, lobsters 16/20 (2 robots-blocked at the ARTICLE level, proving the
+      per-URL check), reddit-programming 0/20 with all 20 robots-blocked, arstechnica
+      0/20 and infoq 0/20 as predicted. 234 bodies extracted; `article_content` went
+      from 120 feed-only rows to 354.
+      GZIP AND CHARSET BOTH PAID OFF IMMEDIATELY: znews (the gzip-without-asking source)
+      extracts cleanly with diacritics intact — "Theo nhà báo Fabrizio Romano..." — as
+      does viblo. Bytes are handed to jsoup undecoded so it sniffs the document's own
+      charset rather than trusting the header; decoding in the fetcher would have baked
+      mojibake into stored, indexed and hashed text.
+      QUERY PLAN (the artifact): `Index Scan using article_extract_pending_idx` with
+      `Index Cond: (source_id = 22)` and **no Sort node** — the partial index's
+      `(source_id, published_at DESC)` ordering matches the ORDER BY exactly, same
+      technique as `article_feed_idx`. The `NOT EXISTS` becomes a `Nested Loop Anti Join`
+      against `article_content_pkey`, not a scan.
+      CAP VERIFIED directly rather than waited out: with attempts forced to 3, the
+      selection returns 0 rows and the enqueuer stops queueing the source.
+      **DEDUP LAYER 2 CAUGHT ITS FIRST DUPLICATES** now that bodies exist — 2 pairs
+      (znews, genk), same source, same body, different URLs. Exactly what exact-body
+      hashing catches and URL canonicalization cannot. Note it only DETECTS; promoting
+      a winner is still the unticked `duplicate_of_id` box below.
+      `ArticleFetcherTest` 7 tests against a JDK stub (gzip, charset, 202/405, size cap).
+      92 container-free tests green.
 
 ### Dedup — the interesting problem, do it in layers
 - [x] URL canonicalization: strip `utm_*`, fragments, sort query params → `canonical_url`
@@ -986,4 +1035,53 @@ YYYY-MM-DD  Phase 0  —
                      Next: wire fetch_article now that the politeness floor exists —
                      per-source batch job, robots-checked per ARTICLE URL (aggregator
                      links are third-party), gzip handling for znews.
+
+2026-07-29          fetch_article wired. Extraction now runs unattended and 234 bodies
+                     landed on the first few cycles.
+                     FOUND A LATENT BUG BEFORE WRITING THE FEATURE: `claimBatch` never
+                     filtered `job_type`. Invisible while every row was a fetch_feed, and
+                     a live bug the moment a second type existed — the feed worker would
+                     claim article jobs and hand HTML to the RSS parser. Made `jobType` a
+                     required parameter with no default so a third type cannot
+                     reintroduce it quietly; the compiler then pointed at the one call
+                     site that needed updating, which is the entire argument for not
+                     giving it a default.
+                     V6 exists because the obvious predicate — "articles with no
+                     article_content row" — has no memory, so a page that CANNOT be
+                     extracted is retried every cycle forever. Ars Technica 202s and
+                     InfoQ 405s on every single article, so this was going to be ~109
+                     pointless requests per cycle, aimed at two sites that have already
+                     said no. A counter, not a boolean, so a blip is retried and a
+                     permanently broken page is abandoned. Bumped BEFORE the attempt:
+                     crediting only a clean finish is how you get an infinite loop
+                     against the one page that reliably kills the process.
+                     THE MEASUREMENTS FROM THE LAST TWO SESSIONS ALL PAID OFF HERE.
+                     Per-host rate limiting mattered because Lobsters' bodies actually
+                     came from blog.calif.io, spectrum.ieee.org and intertwingly.net.
+                     Per-article robots mattered because 2 of those 20 were blocked by
+                     the third party, and all 20 reddit URLs were blocked. Gzip mattered
+                     because znews extracts 20/20 with diacritics intact. Handing jsoup
+                     undecoded bytes mattered for the same reason — decoding in the
+                     fetcher bakes mojibake into stored, indexed AND hashed text, where
+                     it is unrecoverable.
+                     QUERY PLAN IS THE ARTIFACT: Index Scan on article_extract_pending_idx
+                     with NO Sort node, because the partial index is ordered
+                     (source_id, published_at DESC) to match the ORDER BY — the same
+                     trick as article_feed_idx, now used twice. NOT EXISTS planned as a
+                     Nested Loop Anti Join on the PK.
+                     Verified the attempt cap by forcing attempts to 3 and confirming the
+                     selection returns 0 and the enqueuer stops — then restored the real
+                     value rather than leaving fabricated state in the DB.
+                     **DEDUP LAYER 2 FINALLY CAUGHT SOMETHING.** Two duplicate pairs
+                     (znews, genk): same source, same body, different URLs. Last session
+                     I recorded content_hash as catching 0 and said it would only pay off
+                     once the extractor gave all sources bodies. It did, and it does.
+                     It DETECTS only — promoting a winner via duplicate_of_id is still
+                     unticked, and that is the next dedup step.
+                     92 container-free tests green. The 5 Testcontainers-backed tests
+                     (4 ITs + PhusaApplicationTests) still cannot start on this Mac —
+                     verified pre-existing by stashing and re-running.
+                     Next: promote detected duplicates (status='duplicate' +
+                     duplicate_of_id, earliest published wins), then simhash for
+                     near-duplicates.
 ```

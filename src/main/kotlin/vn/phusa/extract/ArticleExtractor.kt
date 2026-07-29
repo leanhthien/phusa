@@ -74,8 +74,28 @@ object ArticleExtractor {
      */
     private const val MAX_LINK_DENSITY = 0.5
 
+    /**
+     * Preferred entry point: raw response bytes, undecoded.
+     *
+     * Passing `charsetName = null` makes jsoup detect the encoding from the document's
+     * own `<meta charset>` / BOM rather than trusting the Content-Type header. On
+     * Vietnamese pages that difference is the difference between "mã nguồn mở" and
+     * mojibake — and mojibake here is permanent, because the mangled text is what gets
+     * stored, indexed and hashed.
+     */
+    fun extract(bytes: ByteArray, baseUri: String): Extraction? {
+        val doc = runCatching {
+            Jsoup.parse(bytes.inputStream(), null, baseUri)
+        }.getOrNull() ?: return null
+        return extract(doc)
+    }
+
     fun extract(html: String, baseUri: String = ""): Extraction? {
         val doc = runCatching { Jsoup.parse(html, baseUri) }.getOrNull() ?: return null
+        return extract(doc)
+    }
+
+    private fun extract(doc: Document): Extraction? {
         strip(doc)
 
         val candidate = bestCandidate(doc) ?: return null

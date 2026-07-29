@@ -65,7 +65,7 @@ class CrawlWorker(
     /** Claims up to [CrawlProperties.batchSize] jobs and runs them. Returns how many it worked. */
     fun runBatch(): Int {
         val now = Instant.now()
-        val claimed = jobs.claimBatch(workerId, props.batchSize, props.leaseSeconds, now)
+        val claimed = jobs.claimBatch(workerId, JOB_TYPE, props.batchSize, props.leaseSeconds, now)
         if (claimed.isEmpty()) return 0
 
         log.info("Claimed {} job(s) as {}", claimed.size, workerId)
@@ -231,6 +231,15 @@ class CrawlWorker(
 
     private fun elapsedMs(startNanos: Long): Int =
         Duration.ofNanos(System.nanoTime() - startNanos).toMillis().toInt()
+
+    companion object {
+        /**
+         * This worker claims ONLY feed jobs. Before `fetch_article` existed the claim
+         * ignored `job_type`, which was harmless with one type and would have had this
+         * worker parse an HTML article page as RSS the moment there were two.
+         */
+        const val JOB_TYPE = "fetch_feed"
+    }
 
     /**
      * The ingest path takes a [Source]; the claim returns only the columns it needs.
